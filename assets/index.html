@@ -2251,6 +2251,7 @@
             }
             for (const r of (msg.reactions || [])) renderReactions(r.msgId, r.reactions)
             renderLoadMore()
+            if (!historyHasMore) messagesEl.scrollTop = messagesEl.scrollHeight
           }
         } catch {}
       })
@@ -2368,6 +2369,7 @@
       if (!file || !file.type.startsWith('image/')) return
       const token = session?.token
       if (!token) return
+      const msgId = crypto.randomUUID()
       const start = chatInput.selectionStart
       const end = chatInput.selectionEnd
       const before = chatInput.value.slice(0, start)
@@ -2379,7 +2381,7 @@
       try {
         const res = await fetch('/api/upload', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type },
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type, 'X-Message-Id': msgId },
           body: file
         })
         if (!res.ok) {
@@ -2544,17 +2546,18 @@
 
         const token = session?.token
         if (!token) return
+        const msgId = crypto.randomUUID()
         recordBtn.disabled = true
         try {
           const res = await fetch('/api/upload', {
             method: 'POST',
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': blob.type },
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': blob.type, 'X-Message-Id': msgId },
             body: blob
           })
           if (!res.ok) return
           const { url } = await res.json()
           if (ws?.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'message', text: url }))
+            ws.send(JSON.stringify({ type: 'message', text: url, id: msgId }))
           }
         } finally {
           recordBtn.disabled = chatInput.disabled

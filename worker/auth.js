@@ -128,9 +128,13 @@ export const handleAuth = async (req, env, domain) => {
     if (!ext) return json({ error: 'unsupported file type' }, 400)
     const body = await req.arrayBuffer()
     if (body.byteLength > 10 * 1024 * 1024) return json({ error: 'too large' }, 413)
-    const key = `uploads/${crypto.randomUUID()}.${ext}`
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    const msgId = req.headers?.get?.('x-message-id')
+    const safeId = (msgId && UUID_RE.test(msgId)) ? msgId : crypto.randomUUID()
+    const folder = contentType.startsWith('audio/') ? 'audio' : 'images'
+    const key = `uploads/${folder}/${safeId}.${ext}`
     await env.BACKUP.put(key, body, { httpMetadata: { contentType } })
-    return json({ url: `/api/upload/${key.slice(8)}` })
+    return json({ url: `/api/upload/${folder}/${safeId}.${ext}` })
   }
 
   const inviteMatch = path.match(/^\/api\/invite\/validate\/(.+)$/)

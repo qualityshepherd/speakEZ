@@ -239,7 +239,8 @@ export class ChatRoom {
 
     const { pubkey, name, avatar } = ws.deserializeAttachment()
     const ts = Date.now()
-    const id = crypto.randomUUID()
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    const id = (typeof parsed.id === 'string' && UUID_RE.test(parsed.id)) ? parsed.id : crypto.randomUUID()
     const replyTo = parsed.replyTo && typeof parsed.replyTo.id === 'string'
       ? { id: parsed.replyTo.id, from: parsed.replyTo.from, text: String(parsed.replyTo.text || '').slice(0, 100) }
       : undefined
