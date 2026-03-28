@@ -1,0 +1,24 @@
+{
+  "name": "speakez",
+  "version": "1.0.0",
+  "description": "",
+  "license": "AGPL-3.0-or-later",
+  "author": "brine",
+  "type": "module",
+  "main": "worker/index.js",
+  "scripts": {
+    "test": "node --test --test-reporter spec test/unit/**/*.test.js",
+    "test:e2e": "node --test --test-reporter spec test/e2e/**/*.test.js",
+    "test:local": "node test/scripts/local-e2e.js",
+    "invite": "curl -X POST https://speakez.brine.dev/api/invite -H \"Authorization: Bearer $ADMIN_SECRET\"",
+    "purge": "curl -X POST \"https://api.cloudflare.com/client/v4/zones/$BRINE_TOKEN/purge_cache\" -H \"Authorization: Bearer $BEARER\" -H \"Content-Type: application/json\" --data '{\"purge_everything\":true}'",
+    "pretty": "npx standard --fix"
+  },
+  "devDependencies": {
+    "axe-core": "^4.11.1",
+    "puppeteer": "^24.39.1"
+  },
+  "dependencies": {
+    "marked": "^17.0.5"
+  }
+}
