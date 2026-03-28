@@ -380,5 +380,18 @@ export const handleAuth = async (req, env, domain) => {
     return json({ ok: true })
   }
 
+  if (method === 'GET' && path === '/api/turn') {
+    const found = await requireSession()
+    if (!found) return json({ error: 'unauthorized' }, 401)
+    if (!env.TURN_KEY_ID || !env.TURN_SECRET) return json({ error: 'turn not configured' }, 503)
+    const res = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate`,
+      { method: 'POST', headers: { Authorization: `Bearer ${env.TURN_SECRET}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl: 86400 }) }
+    )
+    if (!res.ok) return json({ error: 'failed to get turn credentials' }, 502)
+    const creds = await res.json()
+    return json(creds)
+  }
+
   return json({ error: 'not found' }, 404)
 }

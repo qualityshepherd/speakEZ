@@ -231,6 +231,8 @@
       align-items: center;
       gap: 0.15rem;
       flex: 1;
+      min-width: 0;
+      overflow: hidden;
       background: var(--surface-2);
       border-radius: 8px;
       padding: 0 0.4rem 0 0.65rem;
@@ -242,6 +244,7 @@
 
     .chat-input-row textarea {
       flex: 1;
+      min-width: 0;
       margin-bottom: 0;
       resize: none;
       overflow-y: auto;
@@ -2654,7 +2657,15 @@
     }
 
     // — Voice —
-    const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
+    let ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
+    const refreshTurnCredentials = async () => {
+      try {
+        const res = await fetch('/api/turn', { headers: { Authorization: `Bearer ${session.token}` } })
+        if (!res.ok) return
+        const { iceServers } = await res.json()
+        if (iceServers?.length) ICE_CONFIG = { iceServers }
+      } catch {}
+    }
     let voiceWs = null
     let localStream = null
     let localCtx = null
@@ -2875,7 +2886,16 @@
           voiceWs.send(JSON.stringify({ type: 'signal', to: pubkey, data: { ice: e.candidate } }))
       }
       pc.onconnectionstatechange = () => {
-        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) closePeer(pubkey)
+        if (['failed', 'closed'].includes(pc.connectionState)) closePeer(pubkey)
+        if (pc.connectionState === 'connected') {
+          pc.getSenders().forEach(sender => {
+            if (sender.track?.kind !== 'audio') return
+            const params = sender.getParameters()
+            if (!params.encodings?.length) params.encodings = [{}]
+            params.encodings[0].maxBitrate = 192000
+            sender.setParameters(params).catch(() => {})
+          })
+        }
       }
 
       if (initiator) {
@@ -3088,6 +3108,7 @@
     const joinVoice = async (channelId) => {
       if (activeVoiceChannel === channelId) return
       if (activeVoiceChannel) leaveVoice()
+      await refreshTurnCredentials()
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
           audio: { ...audioConstraints, sampleRate: 48000 },
