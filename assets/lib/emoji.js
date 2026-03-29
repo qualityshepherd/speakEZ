@@ -256,18 +256,16 @@ const DATA = [
   ['🍄', 'mushroom', 'fungi', 'mario'],
   ['🌺', 'hibiscus', 'flower', 'tropical'],
   ['🌸', 'cherry blossom', 'flower', 'pink', 'japan'],
-  ['🌻', 'sunflower', 'flower', 'yellow', 'sun'],
+  ['🌻', 'sunflower', 'flower', 'yellow', 'sun']
 ]
 
 export const searchEmoji = (query) => {
   const q = query.toLowerCase().trim()
   if (q.length < 2) return []
-  const exact = [], prefix = [], contains = []
+  const exact = []; const prefix = []; const contains = []
   for (const [e, ...names] of DATA) {
     for (const name of names) {
-      if (name === q) { exact.push({ e, name: names[0] }); break }
-      else if (name.startsWith(q)) { prefix.push({ e, name: names[0] }); break }
-      else if (name.includes(q)) { contains.push({ e, name: names[0] }); break }
+      if (name === q) { exact.push({ e, name: names[0] }); break } else if (name.startsWith(q)) { prefix.push({ e, name: names[0] }); break } else if (name.includes(q)) { contains.push({ e, name: names[0] }); break }
     }
   }
   return [...exact, ...prefix, ...contains].slice(0, 8)

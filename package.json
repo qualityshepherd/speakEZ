@@ -12,13 +12,23 @@
     "test:local": "node test/scripts/local-e2e.js",
     "invite": "curl -X POST https://speakez.brine.dev/api/invite -H \"Authorization: Bearer $ADMIN_SECRET\"",
     "purge": "curl -X POST \"https://api.cloudflare.com/client/v4/zones/$BRINE_TOKEN/purge_cache\" -H \"Authorization: Bearer $BEARER\" -H \"Content-Type: application/json\" --data '{\"purge_everything\":true}'",
+    "purge-messages": "curl -X POST https://speakez.brine.dev/api/admin/purge-messages -H \"Authorization: Bearer $ADMIN_SECRET\"",
     "pretty": "npx standard --fix"
+  },
+  "standard": {
+    "env": ["browser"],
+    "globals": [
+      "HTMLRewriter", "WebSocketPair", "DurableObject",
+      "MINIFLARE", "clients", "skipWaiting", "axe", "marked"
+    ],
+    "rules": {
+      "import/no-absolute-path": 0,
+      "no-use-before-define": 0
+    }
   },
   "devDependencies": {
     "axe-core": "^4.11.1",
     "puppeteer": "^24.39.1"
   },
-  "dependencies": {
-    "marked": "^17.0.5"
-  }
+  "dependencies": {}
 }

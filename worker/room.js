@@ -1,3 +1,22 @@
+import { sendPush } from './push.js'
+
+export const sanitizeFtsQuery = (q) =>
+  q.replace(/["*^+\-()[\]:]/g, ' ').replace(/\s+/g, ' ').trim()
+
+export const parseMentions = (text, members) => {
+  const handles = (text.match(/@(\S+)/g) || []).map(m => m.slice(1).toLowerCase())
+  if (!handles.length) return []
+  const found = []
+  for (const member of members) {
+    const name = (member.name || '').toLowerCase()
+    const firstName = name.split(' ')[0]
+    if (handles.some(h => h === name || h === firstName)) {
+      if (!found.includes(member.pubkey)) found.push(member.pubkey)
+    }
+  }
+  return found
+}
+
 export const toggleEmoji = (reactions, pubkey, emoji) => {
   const next = { ...reactions, [emoji]: [...(reactions[emoji] || [])] }
   const idx = next[emoji].indexOf(pubkey)
@@ -28,12 +47,84 @@ export class ChatRoom {
     if (!alarm) await this.state.storage.setAlarm(nextMidnight())
   }
 
+  _ensureSchema () {
+    if (this._schemaReady) return
+    const sql = this.state.storage.sql
+    sql.exec(`CREATE TABLE IF NOT EXISTS msgs (
+      id TEXT UNIQUE NOT NULL,
+      ts INTEGER NOT NULL,
+      envelope TEXT NOT NULL
+    )`)
+    sql.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS msgs_fts USING fts5(
+      text,
+      content='msgs',
+      content_rowid='rowid'
+    )`)
+    this._schemaReady = true
+  }
+
+  async _backfillFts () {
+    const migrated = await this.state.storage.get('fts_migrated_v1')
+    if (migrated) return
+    const sql = this.state.storage.sql
+    const history = await this.state.storage.list({ prefix: 'msg:' })
+    for (const envelope of history.values()) {
+      try {
+        const m = JSON.parse(envelope)
+        if (!m.id || !m.ts || typeof m.text !== 'string') continue
+        sql.exec('INSERT OR IGNORE INTO msgs(id, ts, envelope) VALUES (?, ?, ?)', m.id, m.ts, envelope)
+        const rows = [...sql.exec('SELECT rowid FROM msgs WHERE id = ?', m.id)]
+        if (rows[0]) sql.exec('INSERT INTO msgs_fts(rowid, text) VALUES (?, ?)', rows[0].rowid, m.text)
+      } catch {}
+    }
+    await this.state.storage.put('fts_migrated_v1', true)
+  }
+
+  _ftsInsert (id, ts, envelope, text) {
+    const sql = this.state.storage.sql
+    sql.exec('INSERT OR IGNORE INTO msgs(id, ts, envelope) VALUES (?, ?, ?)', id, ts, envelope)
+    const rows = [...sql.exec('SELECT rowid FROM msgs WHERE id = ?', id)]
+    if (rows[0]) sql.exec('INSERT INTO msgs_fts(rowid, text) VALUES (?, ?)', rows[0].rowid, text)
+  }
+
+  _ftsDelete (id) {
+    const sql = this.state.storage.sql
+    const rows = [...sql.exec('SELECT rowid FROM msgs WHERE id = ?', id)]
+    if (!rows[0]) return
+    sql.exec('INSERT INTO msgs_fts(msgs_fts, rowid, text) VALUES(\'delete\', ?, ?)', rows[0].rowid, '')
+    sql.exec('DELETE FROM msgs WHERE id = ?', id)
+  }
+
+  _ftsUpdate (id, newText, newEnvelope) {
+    const sql = this.state.storage.sql
+    const rows = [...sql.exec('SELECT rowid FROM msgs WHERE id = ?', id)]
+    if (!rows[0]) return
+    const rowid = rows[0].rowid
+    sql.exec('INSERT INTO msgs_fts(msgs_fts, rowid, text) VALUES(\'delete\', ?, ?)', rowid, '')
+    sql.exec('INSERT INTO msgs_fts(rowid, text) VALUES (?, ?)', rowid, newText)
+    sql.exec('UPDATE msgs SET envelope = ? WHERE id = ?', newEnvelope, id)
+  }
+
   async fetch (req) {
     await this._ensureAlarm()
+    this._ensureSchema()
+    await this._backfillFts()
 
     const url = new URL(req.url)
     const doJson = (data, status = 200) =>
       new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
+
+    if (req.method === 'POST' && url.pathname.endsWith('/purge')) {
+      const msgs = await this.state.storage.list({ prefix: 'msg:' })
+      const reacts = await this.state.storage.list({ prefix: 'react:' })
+      const keys = [...msgs.keys(), ...reacts.keys()]
+      for (const k of keys) await this.state.storage.delete(k)
+      try { this.state.storage.sql.exec('DELETE FROM msgs'); this.state.storage.sql.exec('DELETE FROM msgs_fts') } catch {}
+      await this.state.storage.delete('fts_migrated_v1')
+      this._schemaReady = false
+      this.getWebSockets?.()?.forEach(ws => { try { ws.send(JSON.stringify({ type: 'purged' })) } catch {} })
+      return doJson({ ok: true, deleted: keys.length })
+    }
 
     if (req.method === 'GET' && url.pathname.endsWith('/last')) {
       const history = await this.state.storage.list({ prefix: 'msg:', reverse: true, limit: 1 })
@@ -43,17 +134,26 @@ export class ChatRoom {
     }
 
     if (req.method === 'GET' && url.pathname.endsWith('/search')) {
-      const q = (url.searchParams.get('q') || '').toLowerCase().trim()
+      const q = sanitizeFtsQuery(url.searchParams.get('q') || '')
       if (!q) return doJson([])
-      const history = await this.state.storage.list({ prefix: 'msg:' })
-      const results = []
-      for (const envelope of history.values()) {
-        let m
-        try { m = JSON.parse(envelope) } catch { continue }
-        if (m.text?.toLowerCase().includes(q)) results.push(m)
+      try {
+        const rows = [...this.state.storage.sql.exec(
+          `SELECT m.envelope FROM msgs m
+           INNER JOIN msgs_fts ON msgs_fts.rowid = m.rowid
+           WHERE msgs_fts MATCH ?
+           ORDER BY m.ts DESC LIMIT 50`,
+          q
+        )]
+        return doJson(rows.map(r => JSON.parse(r.envelope)))
+      } catch {
+        return doJson([])
       }
-      results.sort((a, b) => b.ts - a.ts)
-      return doJson(results.slice(0, 50))
+    }
+
+    if (req.method === 'POST' && url.pathname.endsWith('/internal/setup-private')) {
+      await this.state.storage.put('room_private', true)
+      await this.state.storage.put('room_last_activity', Date.now())
+      return new Response('ok')
     }
 
     if (req.method === 'POST' && url.pathname.endsWith('/internal/broadcast')) {
@@ -74,10 +174,16 @@ export class ChatRoom {
     this.state.acceptWebSocket(server)
     const attachment = {
       pubkey: req.headers.get('X-Member-Pubkey') || '',
-      name:   req.headers.get('X-Member-Name')   || '',
-      avatar: req.headers.get('X-Member-Avatar')  || ''
+      name: req.headers.get('X-Member-Name') || '',
+      avatar: req.headers.get('X-Member-Avatar') || ''
     }
     server.serializeAttachment(attachment)
+
+    // Store room ID on first connect so push logic can find it
+    if (!this._roomId) {
+      this._roomId = req.headers.get('X-Room-Id') || ''
+      if (this._roomId) this.state.storage.put('room_id', this._roomId).catch(() => {})
+    }
 
     // send current presence list to new connection (excludes self)
     const members = this.state.getWebSockets()
@@ -176,6 +282,7 @@ export class ChatRoom {
         for (const { key, id } of toDelete) {
           await this.state.storage.delete(key)
           await this.state.storage.delete(`react:${id}`)
+          this._ftsDelete(id)
           const broadcast = JSON.stringify({ type: 'delete', id })
           for (const peer of this.state.getWebSockets()) {
             try { peer.send(broadcast) } catch {}
@@ -224,7 +331,9 @@ export class ChatRoom {
           if (!canModify(pubkey, m.from?.pubkey, this.env.ADMINS)) return
           m.text = text.slice(0, 2000)
           m.edited = true
-          await this.state.storage.put(key, JSON.stringify(m))
+          const newEnvelope = JSON.stringify(m)
+          await this.state.storage.put(key, newEnvelope)
+          this._ftsUpdate(id, m.text, newEnvelope)
           const broadcast = JSON.stringify({ type: 'edited', id, text: m.text })
           for (const peer of this.state.getWebSockets()) {
             try { peer.send(broadcast) } catch {}
@@ -254,14 +363,69 @@ export class ChatRoom {
     })
 
     await this.state.storage.put(`msg:${ts}:${id}`, envelope)
+    this._ftsInsert(id, ts, envelope, parsed.text.slice(0, 2000))
 
     for (const peer of this.state.getWebSockets()) {
       try { peer.send(envelope) } catch {}
+    }
+
+    // Push notifications — fire and forget
+    this._pushDmNotify(pubkey, name, parsed.text).catch(() => {})
+    this._pushMentionNotify(pubkey, name, parsed.text).catch(() => {})
+  }
+
+  async _pushMentionNotify (senderPubkey, senderName, text) {
+    const members = await this.env.KV.get('members', { type: 'json' })
+    if (!members?.length) return
+    const mentioned = parseMentions(text, members)
+    if (!mentioned.length) return
+    const connected = new Set(
+      this.state.getWebSockets().map(ws => ws.deserializeAttachment()?.pubkey).filter(Boolean)
+    )
+    const title = `@mention from ${senderName || senderPubkey.slice(0, 8)}`
+    const body = text.slice(0, 120)
+    for (const pubkey of mentioned) {
+      if (pubkey === senderPubkey || connected.has(pubkey)) continue
+      const sub = await this.env.KV.get(`push:${pubkey}`, { type: 'json' })
+      if (!sub) continue
+      const result = await sendPush(sub, { title, body, url: '/', tag: `mention-${pubkey}` }, this.env)
+      if (result?.expired) await this.env.KV.delete(`push:${pubkey}`)
+    }
+  }
+
+  async _pushDmNotify (senderPubkey, senderName, text) {
+    const roomId = this._roomId || await this.state.storage.get('room_id')
+    if (!roomId) return
+    const dmRoom = await this.env.KV.get(`dm:${roomId}`, { type: 'json' })
+    if (!dmRoom) return // not a DM room
+    const connected = new Set(
+      this.state.getWebSockets().map(ws => ws.deserializeAttachment()?.pubkey).filter(Boolean)
+    )
+    const title = senderName || senderPubkey.slice(0, 8)
+    const body = text.slice(0, 120)
+    for (const memberPubkey of dmRoom.members) {
+      if (memberPubkey === senderPubkey || connected.has(memberPubkey)) continue
+      const sub = await this.env.KV.get(`push:${memberPubkey}`, { type: 'json' })
+      if (!sub) continue
+      const result = await sendPush(sub, { title, body, url: '/', tag: `dm-${roomId}` }, this.env)
+      if (result?.expired) await this.env.KV.delete(`push:${memberPubkey}`)
     }
   }
 
   async alarm () {
     const date = new Date().toISOString().slice(0, 10)
+    const MAX_MSGS = 10000
+
+    const isPrivate = await this.state.storage.get('room_private')
+    if (isPrivate) {
+      const lastActivity = await this.state.storage.get('room_last_activity') || 0
+      if (Date.now() - lastActivity > 30 * 24 * 60 * 60 * 1000) {
+        await this.state.storage.deleteAll()
+        return // room gone, no alarm rescheduled
+      }
+      await this.state.storage.setAlarm(nextMidnight())
+      return // private rooms skip backup
+    }
 
     if (!this.env.BACKUP) {
       console.error('R2 binding missing — skipping backup')
@@ -271,17 +435,35 @@ export class ChatRoom {
 
     try {
       const history = await this.state.storage.list({ prefix: 'msg:' })
+      const reacts = await this.state.storage.list({ prefix: 'react:' })
       const messages = []
       for (const envelope of history.values()) {
         try { messages.push(JSON.parse(envelope)) } catch {}
       }
+      const reactions = {}
+      for (const [key, json] of reacts) {
+        try { reactions[key.slice(6)] = JSON.parse(json) } catch {}
+      }
 
       await this.env.BACKUP.put(
         `backups/${date}.json`,
-        JSON.stringify(messages),
+        JSON.stringify({ messages, reactions }),
         { httpMetadata: { contentType: 'application/json' } }
       )
-      console.log(`Backed up ${messages.length} messages → backups/${date}.json`)
+      console.log(`Backed up ${messages.length} messages, ${Object.keys(reactions).length} reactions → backups/${date}.json`)
+
+      if (messages.length > MAX_MSGS) {
+        this._ensureSchema()
+        const keys = [...history.keys()]
+        const toDelete = keys.slice(0, messages.length - MAX_MSGS)
+        for (const key of toDelete) {
+          const id = key.split(':')[2]
+          await this.state.storage.delete(key)
+          await this.state.storage.delete(`react:${id}`)
+          this._ftsDelete(id)
+        }
+        console.log(`Pruned ${toDelete.length} old messages → ${MAX_MSGS} cap`)
+      }
     } catch (err) {
       console.error('R2 backup failed:', err)
       await this.state.storage.setAlarm(nextMidnight())
@@ -291,25 +473,26 @@ export class ChatRoom {
     await this.state.storage.setAlarm(nextMidnight())
   }
 
-  async webSocketClose (ws, code, reason) {
-    try { ws.close(code, reason) } catch {}
+  async _onDisconnect (ws, closeWs, code, reason) {
+    try { if (closeWs) ws.close(code, reason) } catch {}
     const { pubkey } = ws.deserializeAttachment()
     if (pubkey) {
       const leave = JSON.stringify({ type: 'leave', pubkey })
       for (const peer of this.state.getWebSockets()) {
         try { peer.send(leave) } catch {}
       }
+    }
+    const isPrivate = await this.state.storage.get('room_private')
+    if (isPrivate && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll()
     }
   }
 
+  async webSocketClose (ws, code, reason) {
+    await this._onDisconnect(ws, true, code, reason)
+  }
+
   async webSocketError (ws) {
-    try { ws.close(1011, 'error') } catch {}
-    const { pubkey } = ws.deserializeAttachment()
-    if (pubkey) {
-      const leave = JSON.stringify({ type: 'leave', pubkey })
-      for (const peer of this.state.getWebSockets()) {
-        try { peer.send(leave) } catch {}
-      }
-    }
+    await this._onDisconnect(ws, true, 1011, 'error')
   }
 }

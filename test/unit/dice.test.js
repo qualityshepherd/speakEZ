@@ -64,12 +64,12 @@ test('rollStandard: sum is within valid range', async t => {
 
 test('rollNamed: returns die face character', async t => {
   const r = rollNamed(6)
-  t.ok(['⚀','⚁','⚂','⚃','⚄','⚅'].some(f => r.includes(f)))
+  t.ok(['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'].some(f => r.includes(f)))
 })
 
 test('rollNamed: returns result symbol', async t => {
   const r = rollNamed(6)
-  t.ok(['🗡️','⚖️','💀'].some(s => r.includes(s)))
+  t.ok(['🗡️', '⚖️', '💀'].some(s => r.includes(s)))
 })
 
 test('rollNamed: contains d6n', async t => {

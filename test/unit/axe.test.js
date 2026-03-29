@@ -12,10 +12,10 @@ const AXE = path.resolve(__dirname, '../../node_modules/axe-core/axe.min.js')
 
 const MIME = {
   '.html': 'text/html',
-  '.js':   'application/javascript',
-  '.css':  'text/css',
-  '.png':  'image/png',
-  '.svg':  'image/svg+xml',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml'
 }
 
 let server, browser, baseUrl
@@ -24,7 +24,7 @@ before(async () => {
   server = await new Promise(resolve => {
     const s = createServer(async (req, res) => {
       const url = new URL(req.url, 'http://x')
-      let file = path.join(ASSETS, url.pathname === '/' ? '/index.html' : url.pathname)
+      const file = path.join(ASSETS, url.pathname === '/' ? '/index.html' : url.pathname)
       try {
         const body = await readFile(file)
         const ext = path.extname(file)
@@ -104,4 +104,4 @@ const runAxeTest = async (pathname, { injectSession = false, waitFor = null } = 
 
 test('axe: login.html', () => runAxeTest('/login.html'))
 test('axe: invite.html', () => runAxeTest('/invite.html'))
-test('axe: index.html',  () => runAxeTest('/index.html', { injectSession: true, waitFor: '#messages' }))
+test('axe: index.html', () => runAxeTest('/index.html', { injectSession: true, waitFor: '#messages' }))

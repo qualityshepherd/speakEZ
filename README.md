@@ -1,59 +1,88 @@
 # speakEZ
 
-speakEZ is an _invite-only_, tribe-sized, ephemeral group chat. Voice and text. No moderation. No bullshit. It's built on Cloudflare Workers: KV + Durable Objects + R2; and runs on the free tier.
+Invite-only group chat for small tribes. Text, voice, video, recording, DMs. Runs on Cloudflare's free tier. No accounts. No servers. 
 
-## The New Philosophy:
-- Dunbar's number is the mantra
-- Reach is a bad code smell. Always.
-- Invite only. one-use/48hrs
-- Auth is ed25519 async passphrase that never leaves your brain. NEVER stored.
-- Your pubkey IS your identity. Also userId. 
-- Rooms are permanent; Chat is WebSocket. Voice is WebRTC P2P.
-- Threads are `replyTo` in message structure. One level deep ONLY.
-- Moderation tools are: kick and MAYBE later, block at the user/pubkey level. 
-- Otherwise moderation is social. The invite IS moderation.
-- shared rooms between workers are a possible future feature.
+## THE PHILOSOPHY
 
-## auth
+Dunbar's number is the ceiling. Reach is a code smell. The invite _is_ moderation; that and kick. 
 
-Passphrase → PBKDF2 → ed25519 keypair. No stored secrets. No password reset. Forget your phrase, get a new invite, new pubkey. The phrase is the _only_ key.
+- Auth is a passphrase that becomes an ed25519 keypair. Nothing is stored; your phrase never leaves your brain. Forget the phrase, get a new invite, move on.
+- Your pubkey is your identity. No accounts, no email, no recovery.
+- Invites are single-use, 48 hours. 
+- Chat is WebSockets backed up to R2. Voice is WebRTC P2P. No relay servers.
 
-Tokens are prefixed with your domain name and a random token: Single-use, 48 hour expiration invites. Your pubkey is stored, you're in. Add your name, avatar, whatever once inside. 
+## FEATURES
 
-## setup
+- Text channels with markdown, emoji reactions, @mentions, replies
+- Voice channels with per-person volume, DSP
+- Video with grid view and full screen
+- Session recording: one file per person, GREAT for podcasting
+- DMs
+- Custom emoji (drop any gif/png/svg in R2, use as `:filename:`)
+- Push notifications for @mentions
 
-**prerequisites**
-- [Cloudflare account](https://cloudflare.com) (free tier works)
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
-- Node.js 22+
+## SETUP
 
-**1. clone**
+You need a [Cloudflare account](https://cloudflare.com) and [Wrangler](https://developers.cloudflare.com/workers/wrangler/).
+
 ```bash
 git clone https://github.com/you/speakez
 cd speakez
 npm install
 ```
 
-**2. create KV namespace**
+**KV namespace**
 ```bash
 npx wrangler kv namespace create KV
 ```
-paste the returned `id` into `wrangler.toml`.
+Paste the returned `id` into `wrangler.toml`.
 
-**3. create R2 buckets**
+**R2 buckets**
 ```bash
-npx wrangler r2 bucket create speakez-backup
+npx wrangler r2 bucket create speakez-uploads
 npx wrangler r2 bucket create speakez-emoji
 ```
-`speakez-backup` holds daily message backups. `speakez-emoji` holds your custom emoji — drop any gif/png/svg in and use it in chat as `:filename:` (extension stripped).
+`speakez-uploads` holds voice memos and avatars. `speakez-emoji` holds custom emoji.
 
-**4. set your admin secret**
+**Secrets**
 ```bash
 npx wrangler secret put ADMIN_SECRET
 ```
-this is the password for generating invites. keep it safe.
+This is the password for generating invites. The first person in should be an admin — set their pubkey:
+```bash
+npx wrangler secret put ADMINS
+```
+Comma-separated pubkeys. Admins can create/delete/rename channels and categories.
 
-**5. deploy**
+**Push notifications (optional)**
+
+Generate VAPID keys:
+```bash
+node test/scripts/gen-vapid.js
+```
+Then set the three secrets it prints:
+```bash
+npx wrangler secret put VAPID_PUBLIC_KEY
+npx wrangler secret put VAPID_PRIVATE_KEY_JWK
+npx wrangler secret put VAPID_SUBJECT
+```
+Skip this and push notifications just won't show up in the UI.
+
+**Deploy**
 ```bash
 npx wrangler deploy
+```
+
+## INVITES
+
+Hit `/invite` with your `ADMIN_SECRET` to get an invite link. Send it to someone. They set a passphrase, they're in.
+
+```
+https://yourdomain.workers.dev/invite?secret=ADMIN_SECRET
+```
+
+## DEV
+
+```bash
+npm test
 ```

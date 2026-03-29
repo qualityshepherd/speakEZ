@@ -151,7 +151,6 @@ test('toHex: empty string returns empty', t => {
   t.is(toHex(''), '')
 })
 
-
 test('toHex: different domains produce different hex', t => {
   t.not(toHex('brine.dev'), toHex('other.dev'))
 })
@@ -198,4 +197,3 @@ test('deriveKeypair: same phrase different domain = different pubkey', async t =
   const b = await deriveKeypair('correct horse battery staple', 'other.dev')
   t.not(a.pubkey, b.pubkey)
 })
-

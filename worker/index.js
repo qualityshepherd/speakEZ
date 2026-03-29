@@ -1,13 +1,14 @@
 import { handleAuth, memberByToken } from './auth.js'
+import { isRoomMember } from './dm.js'
 import { handleOG } from './og.js'
 import { ChatRoom } from './room.js'
 
 export { ChatRoom }
 
 export const emojiKeyToName = (key) => key.replace(/\.[^.]+$/, '')
-export const emojiKeyToUrl  = (key) => `/emoji/${key}`
+export const emojiKeyToUrl = (key) => `/emoji/${key}`
 
-const AUTH_PATHS = ['/api/invite/', '/api/register', '/api/challenge', '/api/login', '/api/kick', '/api/invite', '/api/me', '/api/members', '/api/sidebar', '/api/upload', '/api/boot', '/api/turn']
+const AUTH_PATHS = ['/api/invite/', '/api/register', '/api/challenge', '/api/login', '/api/kick', '/api/invite', '/api/me', '/api/members', '/api/sidebar', '/api/upload', '/api/boot', '/api/turn', '/api/dm', '/api/admin/', '/api/push/']
 const OG_PATH = '/api/og'
 const PAGES = ['/admin', '/login', '/me', '/invite']
 
@@ -52,7 +53,10 @@ export default {
       const token = req.headers.get('authorization')?.replace('Bearer ', '')
       const found = await memberByToken(token, env.KV)
       if (!found) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } })
-      const id = env.CHAT_ROOM.idFromName(channelMatch[1])
+      const roomId = channelMatch[1]
+      const dmRoom = await env.KV.get(`dm:${roomId}`, { type: 'json' })
+      if (dmRoom && !isRoomMember(dmRoom, found.pubkey)) return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'Content-Type': 'application/json' } })
+      const id = env.CHAT_ROOM.idFromName(roomId)
       return env.CHAT_ROOM.get(id).fetch(req)
     }
 
@@ -62,13 +66,21 @@ export default {
       if (!found) return new Response('unauthorized', { status: 401 })
 
       const room = url.searchParams.get('room') || 'general'
+
+      const dmRoom = await env.KV.get(`dm:${room}`, { type: 'json' })
+      if (dmRoom) {
+        if (!isRoomMember(dmRoom, found.pubkey)) return new Response('forbidden', { status: 403 })
+        await env.KV.put(`dm:${room}`, JSON.stringify({ ...dmRoom, lastActivity: Date.now() }))
+      }
+
       const id = env.CHAT_ROOM.idFromName(room)
       const stub = env.CHAT_ROOM.get(id)
 
       const headers = new Headers(req.headers)
       headers.set('X-Member-Pubkey', found.pubkey)
-      headers.set('X-Member-Name',   found.member.name   || '')
+      headers.set('X-Member-Name', found.member.name || '')
       headers.set('X-Member-Avatar', found.member.avatar || '')
+      headers.set('X-Room-Id', room)
 
       return stub.fetch(new Request(req.url, { headers }))
     }
