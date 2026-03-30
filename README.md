@@ -19,7 +19,7 @@ Text, voice, and video running on Cloudflare's free tier.
 * **Channels**: Text with markdown, emoji reactions, @mentions, and replies.
 * **Voice & Video**: Live voice channels with per-person volume and DSP. Video with grid and full-screen views.
 * **Recording**: Hi-fi session recording with one track per person. Built for podcasts and TTRPG actual plays.
-* **DMs**: Private messages that exist until everyone in the thread leaves.
+* **DMs**: Private messages that persist until the last person leaves.
 * **Voice Memos**: Record and share your voice, async.
 * **Notifications**: Native push notifications for @mentions.
 

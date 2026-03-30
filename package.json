@@ -1,7 +1,7 @@
 {
   "name": "speakez",
   "version": "1.0.0",
-  "description": "",
+  "description": "Group chat that stops at your circle. Invite-only. Not a platform. A sovereign signal. No accounts. No tracking. No one in the middle. Text, voice, and video running on Cloudflare's free tier.",
   "license": "AGPL-3.0-or-later",
   "author": "brine",
   "type": "module",
