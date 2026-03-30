@@ -6,20 +6,21 @@ Text, voice, and video running on Cloudflare's free tier.
 
 ## THE PHILOSOPHY
 
-[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a bad design smell. The invite _is_ moderation; that and kick. 
+[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a design smell. The invite _is_ moderation. That—and kick.
 
-* **Identity vai Math**: Your passphrase becomes an [ed25519](https://ed25519.cr.yp.to/) keypair; public key becomes your userId. Your passphrase is _never_ stored and should never leave your brain. If you forget it, get a new invite and move on.
-* **No Paper Trails**: No accounts, no emails, no recovery, and no facial scans. Your public key is your identity.
+* **Identity via Math**: Your passphrase becomes an Ed25519 keypair. The public key is your user ID. Your passphrase is never stored and should never leave your head. Forget it, and you start over.
+* **No Paper Trails**: No accounts. No emails. No recovery flows. No biometric scans. Your public key is your identity.
 * **Gatekeeping by Design**: Invites are single-use and expire in 48 hours.
-* **No Middlemen**: Chat is WebSockets backed by Durable Objects and R2. Voice is WebRTC P2P.
+* **No Middlemen**: Chat runs over WebSockets backed by Durable Objects and R2. Voice runs peer-to-peer over WebRTC.
+
 
 ## FEATURES
 
 * **Channels**: Text with markdown, emoji reactions, @mentions, and replies.
-* **Comms**: Voice channels with per-person volume and DSP. Video with grid or full-screen views.
-* **Recording**: Hi-fi session recording: one file per person. Perfect for podcasting or TTRPG actual plays.
-* **DMs**: Private messages that exist until everyone invited leaves. 
-* **Voice Memos**: Record and share your words.
+* **Voice & Video**: Live voice channels with per-person volume and DSP. Video with grid and full-screen views.
+* **Recording**: Hi-fi session recording with one track per person. Built for podcasts and TTRPG actual plays.
+* **DMs**: Private messages that exist until everyone in the thread leaves.
+* **Voice Memos**: Record and share your voice, async.
 * **Notifications**: Native push notifications for @mentions.
 
 ![have a peek](assets/images/screenshot.png)
