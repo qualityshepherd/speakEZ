@@ -6,7 +6,7 @@ Text, voice, and video running on Cloudflare's free tier.
 
 ## THE PHILOSOPHY
 
-[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a design smell. The invite _is_ moderation. That—and kick.
+[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a design smell. The invite _is_ moderation. That and kick.
 
 * **Identity via Math**: Your passphrase becomes an Ed25519 keypair. The public key is your user ID. Your passphrase is never stored and should never leave your head. Forget it, and you start over.
 * **No Paper Trails**: No accounts. No emails. No recovery flows. No biometric scans. Your public key is your identity.
