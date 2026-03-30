@@ -1,10 +1,12 @@
 # speakEZ
 
-Invite-only group chat for small groups. Text, voice, video, recording, DMs. Runs on Cloudflare's free tier.
+Group chat that stops at your circle. Invite-only. Not a platform; a sovereign signal. No accounts, no middlemen, and no data harvesting. 
+
+Text, voice, and video running on Cloudflare's free tier.
 
 ## THE PHILOSOPHY
 
-[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a bad code smell. The invite _is_ the moderation; that and kick. 
+[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a bad design smell. The invite _is_ the moderation; that and kick. 
 
 * **Identity vai Math**: Your passphrase becomes an [ed25519](https://ed25519.cr.yp.to/) keypair; public key becomes your userId. Your passphrase is _never_ stored and should never leave your brain. If you forget it, get a new invite and move on.
 * **No Paper Trails**: No accounts, no emails, no recovery, and no facial scans. Your public key is your identity.
