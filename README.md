@@ -10,8 +10,9 @@ Text, voice, and video running on Cloudflare's free tier.
 
 * **Identity via Math**: Your passphrase becomes an Ed25519 keypair. The public key is your user ID. Your passphrase is never stored and should never leave your head. Forget it, and you start over.
 * **No Paper Trails**: No accounts. No emails. No recovery flows. No biometric scans. Your public key is your identity.
-* **Gatekeeping by Design**: Invites are single-use and expire in 48 hours.
+* **Limited Access by Design**: Invites are single-use and expire in 48 hours.
 * **No Middlemen**: Chat runs over WebSockets backed by Durable Objects and R2. Voice runs peer-to-peer over WebRTC.
+* **Sovereignty over Scalability**
 
 
 ## FEATURES
@@ -23,7 +24,15 @@ Text, voice, and video running on Cloudflare's free tier.
 * **Voice Memos**: Record and share your voice, async.
 * **Notifications**: Native push notifications for @mentions.
 
-![have a peek](assets/images/screenshot.png)
+![have a peek](./assets/images/screenshot.png)
+
+## STACK
+
+- Cloudflare Workers + Durable Objects + KV + R2
+- Ed25519 for identity (passphrase → keypair)
+- WebSockets for chat, WebRTC for voice/video
+- FTS5 SQLite for message search
+- Alarm-based backup to R2
 
 ## SETUP
 
@@ -36,6 +45,8 @@ npm install
 ```
 
 **1. Infrastructure**
+> New to Wrangler? Run `npx wrangler login` first to authenticate your account.
+
 Create your KV namespace and R2 buckets:
 ```bash
 npx wrangler kv namespace create KV
