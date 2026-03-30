@@ -1,6 +1,6 @@
 # speakEZ
 
-Group chat that stops at your circle. Invite-only. Not a platform; a sovereign signal. No accounts, no middlemen, and no data harvesting. 
+Group chat that stops at your circle. Invite-only. Not a platform. A sovereign signal. No accounts. No tracking. No one in the middle. 
 
 Text, voice, and video running on Cloudflare's free tier.
 
