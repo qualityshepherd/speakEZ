@@ -1,13 +1,13 @@
 # speakEZ
 
-Invite-only group chat for small tribes. Text, voice, video, recording, DMs. Built to run on Cloudflare's free tier.
+Invite-only group chat for small groups. Text, voice, video, recording, DMs. Runs on Cloudflare's free tier.
 
 ## THE PHILOSOPHY
 
-[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a code smell. The invite _is_ the moderation; that and kick. 
+[Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a bad code smell. The invite _is_ the moderation; that and kick. 
 
-* **Identity is Math**: Your passphrase becomes an ed25519 keypair. Nothing is stored. Your phrase never leaves your head. If you forget it, get a new invite and move on.
-* **No Paper Trails**: No accounts, no emails, no recovery, and no facial scans. Your public key is your only ID.
+* **Identity vai Math**: Your passphrase becomes an [ed25519](https://ed25519.cr.yp.to/) keypair; public key becomes your userId. Your passphrase is _never_ stored and should never leave your brain. If you forget it, get a new invite and move on.
+* **No Paper Trails**: No accounts, no emails, no recovery, and no facial scans. Your public key is your identity.
 * **Gatekeeping by Design**: Invites are single-use and expire in 48 hours.
 * **No Middlemen**: Chat is WebSockets backed by Durable Objects and R2. Voice is WebRTC P2P.
 
@@ -15,10 +15,12 @@ Invite-only group chat for small tribes. Text, voice, video, recording, DMs. Bui
 
 * **Channels**: Text with markdown, emoji reactions, @mentions, and replies.
 * **Comms**: Voice channels with per-person volume and DSP. Video with grid or full-screen views.
-* **Recording**: High-fidelity session recording. One file per person. Perfect for podcasting or TTRPG logs.
-* **DMs**: Private direct messages.
-* **Customization**: Drop any gif, png, or svg into R2 to use as a custom emoji.
+* **Recording**: Hi-fi session recording: one file per person. Perfect for podcasting or TTRPG actual plays.
+* **DMs**: Private messages that exist until everyone invited leaves. 
+* **Voice Memos**: Record and share your words.
 * **Notifications**: Native push notifications for @mentions.
+
+![have a peek](assets/images/screenshot.png)
 
 ## SETUP
 
