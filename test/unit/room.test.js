@@ -1,5 +1,5 @@
 import { unit as test } from '../testpup.js'
-import { canModify, toggleEmoji, sanitizeFtsQuery, parseMentions } from '../../worker/room.js'
+import { canModify, toggleEmoji, sanitizeFtsQuery, parseMentions, getInvitableMentions } from '../../worker/room.js'
 
 test('canModify: owner can modify their own message', t => {
   t.ok(canModify('pk1', 'pk1', ''))
@@ -131,4 +131,38 @@ test('parseMentions: empty text returns empty array', t => {
 
 test('parseMentions: empty members returns empty array', t => {
   t.deepEqual(parseMentions('@Alice', []), [])
+})
+
+// — getInvitableMentions —
+const MEMBERS = [
+  { pubkey: 'pk-brine', name: 'brine' },
+  { pubkey: 'pk-otto', name: 'otto' },
+  { pubkey: 'pk-alice', name: 'alice' }
+]
+
+test('getInvitableMentions: returns non-member pubkey for @mention', t => {
+  t.deepEqual(getInvitableMentions('@brine hello', MEMBERS, ['pk-otto'], 'pk-otto'), ['pk-brine'])
+})
+
+test('getInvitableMentions: already-member is excluded', t => {
+  t.deepEqual(getInvitableMentions('@brine hello', MEMBERS, ['pk-otto', 'pk-brine'], 'pk-otto'), [])
+})
+
+test('getInvitableMentions: sender is excluded', t => {
+  t.deepEqual(getInvitableMentions('@otto hello', MEMBERS, ['pk-otto'], 'pk-otto'), [])
+})
+
+test('getInvitableMentions: no mentions returns empty', t => {
+  t.deepEqual(getInvitableMentions('hello world', MEMBERS, ['pk-otto'], 'pk-otto'), [])
+})
+
+test('getInvitableMentions: unknown handle returns empty', t => {
+  t.deepEqual(getInvitableMentions('@nobody', MEMBERS, ['pk-otto'], 'pk-otto'), [])
+})
+
+test('getInvitableMentions: multiple mentions', t => {
+  const result = getInvitableMentions('@brine @alice hi', MEMBERS, ['pk-otto'], 'pk-otto')
+  t.ok(result.includes('pk-brine'))
+  t.ok(result.includes('pk-alice'))
+  t.is(result.length, 2)
 })

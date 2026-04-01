@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>speakEZ</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1e1e1e">
+  <link rel="apple-touch-icon" href="/favicon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="speakEZ">
   <script>if (!JSON.parse(localStorage.getItem('session') || 'null')) document.documentElement.classList.add('no-session')</script>
   <link rel="stylesheet" href="/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -20,7 +26,7 @@
       height: 100%; opacity: 0.35;
     }
     .chat-spinner-img {
-      width: 40px; height: 40px;
+      width: 72px; height: 72px;
       animation: speakez-load 2.4s ease-in-out infinite;
     }
 
@@ -577,7 +583,12 @@
 
     /* chat header with search */
     .chat-header { display: flex; align-items: center; gap: 0.5rem; }
-    .chat-header-name { flex: 1; }
+    .chat-header-prefix { color: var(--muted); font-weight: 600; font-size: 1.1em; flex-shrink: 0; }
+    .chat-header-name { flex-shrink: 0; font-weight: 600; }
+    .chat-header-desc { flex: 1; min-width: 0; color: var(--muted); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.7; }
+    .chat-header-desc:not(:empty)::before { content: '•'; margin: 0 0.5rem; }
+    .chat-header-desc.admin-editable { cursor: pointer; }
+    .chat-header-desc.admin-editable:empty::before { content: 'add description…'; opacity: 0.4; margin: 0; padding-left: 0.25rem; }
     .search-btn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.2rem; display: flex; line-height: 1; }
     .search-btn:hover { color: var(--accent); background: none; }
     .search-bar { display: none; flex: 1; align-items: center; gap: 0.5rem; }
@@ -820,8 +831,10 @@
     </nav>
 
     <div class="chat" id="chat-area" role="region" aria-label="Chat">
-      <div class="chat-header" style="padding:0.75rem 1.25rem;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <div class="chat-header" style="padding:1rem 1.5rem;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <span class="chat-header-prefix" id="room-prefix">#</span>
         <span class="chat-header-name" id="room-name">general</span>
+        <span class="chat-header-desc" id="room-desc"></span>
         <div class="search-bar" id="search-bar">
           <label for="search-input" class="sr-only">Search messages</label>
           <input type="search" id="search-input" placeholder="search messages..." autocomplete="off">
@@ -832,12 +845,7 @@
         </button>
       </div>
 
-      <div class="messages" id="messages" role="log" aria-live="polite" aria-label="Messages" tabindex="0">
-        <div class="empty">
-          nothing here yet.<br>
-          say something.
-        </div>
-      </div>
+      <div class="messages" id="messages" role="log" aria-live="polite" aria-label="Messages" tabindex="0"></div>
 
       <div class="typing-bar" aria-live="polite"><span class="typing-text" id="typing-indicator"></span></div>
 

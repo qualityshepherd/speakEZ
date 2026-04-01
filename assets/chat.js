@@ -658,10 +658,20 @@ export const connect = (room = state.activeChannelId) => {
     sendBtn.disabled = false
     if (!isTouchDevice()) chatInput.focus()
     refreshUnread()
+    fetch('/api/dm', { headers: sidebarAuth() })
+      .then(res => res.ok ? res.json() : null)
+      .then(fresh => {
+        if (!fresh) return
+        let changed = false
+        for (const room of fresh) {
+          if (!dmRooms.find(r => r.id === room.id)) { dmRooms.push(room); changed = true }
+        }
+        if (changed) renderSidebar()
+      }).catch(() => {})
     const ping = setInterval(() => {
       if (state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' }))
       else clearInterval(ping)
-    }, 30000)
+    }, 20000)
     state.ws.addEventListener('close', () => clearInterval(ping), { once: true })
   })
 
@@ -753,6 +763,21 @@ export const connect = (room = state.activeChannelId) => {
 }
 
 let reconnectTimer = null
+
+// Reconnect immediately on wake-from-sleep or network restore
+const reconnectIfDead = () => {
+  if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
+    clearTimeout(reconnectTimer)
+    connect(state.activeChannelId)
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reconnectIfDead() })
+window.addEventListener('online', reconnectIfDead)
+document.addEventListener('focusin', e => {
+  if (e.target.matches('input, textarea') && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'ping' }))
+  }
+})
 
 // — Typing indicator —
 const typingEl = document.getElementById('typing-indicator')

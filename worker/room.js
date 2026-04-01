@@ -32,6 +32,9 @@ export const toggleEmoji = (reactions, pubkey, emoji) => {
   return next
 }
 
+export const getInvitableMentions = (text, allMembers, roomMembers, senderPubkey) =>
+  parseMentions(text, allMembers).filter(pk => pk !== senderPubkey && !roomMembers.includes(pk))
+
 export const canModify = (pubkey, msgFromPubkey, admins = '') =>
   pubkey === msgFromPubkey || admins.split(',').map(s => s.trim()).filter(Boolean).includes(pubkey)
 
@@ -228,6 +231,11 @@ export class ChatRoom {
     let parsed
     try { parsed = JSON.parse(msg) } catch { return }
 
+    if (parsed.type === 'ping') {
+      try { ws.send(JSON.stringify({ type: 'pong' })) } catch {}
+      return
+    }
+
     if (parsed.type === 'signal') {
       const { to, data } = parsed
       if (!to || !data) return
@@ -378,6 +386,7 @@ export class ChatRoom {
     // Push notifications — fire and forget
     this._pushDmNotify(pubkey, name, parsed.text).catch(() => {})
     this._pushMentionNotify(pubkey, name, parsed.text).catch(() => {})
+    this._dmInviteMentioned(pubkey, parsed.text.slice(0, 2000)).catch(() => {})
   }
 
   async _pushMentionNotify (senderPubkey, senderName, text) {
@@ -396,6 +405,31 @@ export class ChatRoom {
       if (!sub) continue
       const result = await sendPush(sub, { title, body, url: '/', tag: `mention-${pubkey}` }, this.env)
       if (result?.expired) await this.env.KV.delete(`push:${pubkey}`)
+    }
+  }
+
+  async _dmInviteMentioned (senderPubkey, text) {
+    const roomId = this._roomId || await this.state.storage.get('room_id')
+    if (!roomId) return
+    const dmRoom = await this.env.KV.get(`dm:${roomId}`, { type: 'json' })
+    if (!dmRoom) return
+    const allMembers = await this.env.KV.get('members', { type: 'json' })
+    if (!allMembers?.length) return
+    const toInvite = getInvitableMentions(text, allMembers, dmRoom.members, senderPubkey)
+    if (!toInvite.length) return
+    const ttl = 7 * 24 * 60 * 60
+    for (const pubkey of toInvite) {
+      await this.env.KV.put(`dm-notify:${pubkey}:${roomId}`, '1', { expirationTtl: ttl })
+    }
+    // Broadcast after KV write so invited users' GET /api/dm sees the key
+    if (!this.env.CHAT_ROOM) return
+    const sidebar = await this.env.KV.get('sidebar', { type: 'json' }) || { channels: [{ id: 'general' }] }
+    const msg = JSON.stringify({ type: 'dm_notify' })
+    for (const ch of (sidebar.channels || [])) {
+      try {
+        const stub = this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(ch.id))
+        await stub.fetch(new Request('https://internal/internal/broadcast', { method: 'POST', body: msg }))
+      } catch {}
     }
   }
 

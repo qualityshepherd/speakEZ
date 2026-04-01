@@ -53,8 +53,21 @@ const adminAuthorized = (req, env) => {
   return !!(env.ADMIN_SECRET) && timingSafeEqual(token, env.ADMIN_SECRET)
 }
 
+export const isRateLimited = (record, now, maxAttempts) =>
+  !!record && now < record.resetAt && record.count >= maxAttempts
+
+export const incrementAttempt = (record, now, windowMs) => {
+  if (!record || now >= record.resetAt) return { count: 1, resetAt: now + windowMs }
+  return { count: record.count + 1, resetAt: record.resetAt }
+}
+
 export const isAdminPubkey = (pubkey, env) =>
   !!(env.ADMINS && env.ADMINS.split(',').map(s => s.trim()).filter(Boolean).includes(pubkey))
+
+export const sanitizeDescription = (desc) => {
+  if (desc == null) return ''
+  return String(desc).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+}
 
 export const memberByToken = async (token, kv) => {
   if (!token) return null
@@ -270,12 +283,26 @@ export const handleAuth = async (req, env, domain) => {
   }
 
   if (method === 'POST' && path === '/api/login') {
+    const ip = req.headers.get('CF-Connecting-IP') || 'unknown'
+    const rlKey = `ratelimit:login:${ip}`
+    const rlRecord = await env.KV.get(rlKey, { type: 'json' })
+    if (isRateLimited(rlRecord, Date.now(), 6)) {
+      console.warn(`[rate-limit] login blocked ip=${ip} count=${rlRecord.count}`)
+      return json({ error: 'too many attempts' }, 429)
+    }
     let _login; try { _login = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const { pubkey, challenge, sig } = _login
     const member = await env.KV.get(pubkey, { type: 'json' })
-    if (!member) return json({ error: 'not found' }, 404)
+    if (!member) {
+      await env.KV.put(rlKey, JSON.stringify(incrementAttempt(rlRecord, Date.now(), 12 * 60 * 1000)), { expirationTtl: 12 * 60 })
+      return json({ error: 'not found' }, 404)
+    }
     const valid = await verifyChallenge(challenge, sig, pubkey)
-    if (!valid) return json({ error: 'unauthorized' }, 401)
+    if (!valid) {
+      await env.KV.put(rlKey, JSON.stringify(incrementAttempt(rlRecord, Date.now(), 12 * 60 * 1000)), { expirationTtl: 12 * 60 })
+      return json({ error: 'unauthorized' }, 401)
+    }
+    await env.KV.delete(rlKey)
     const session = makeSession()
     await env.KV.put(pubkey, JSON.stringify({ ...member, session }))
     await writeSessionIndex(session.token, pubkey, session.expires, env.KV)
@@ -372,12 +399,14 @@ export const handleAuth = async (req, env, domain) => {
     if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
     const id = channelPatchMatch[1]
     let _chp; try { _chp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
-    const { name } = _chp
-    if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
+    const { name, description } = _chp
+    if (name !== undefined && (typeof name !== 'string' || !name)) return json({ error: 'invalid name' }, 400)
+    if (!name && description === undefined) return json({ error: 'nothing to update' }, 400)
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
     const ch = sidebar.channels.find(c => c.id === id)
     if (!ch) return json({ error: 'not found' }, 404)
-    ch.name = name.slice(0, 64)
+    if (name) ch.name = name.slice(0, 64)
+    if (description !== undefined) ch.description = sanitizeDescription(description)
     await env.KV.put('sidebar', JSON.stringify(sidebar))
     await broadcastToRooms(JSON.stringify({ type: 'reload_sidebar' }), env)
     return json(sidebar)
@@ -536,6 +565,7 @@ export const handleAuth = async (req, env, domain) => {
       })).catch(() => {})
     }
 
+    await broadcastToRooms(JSON.stringify({ type: 'dm_notify' }), env)
     return json(room)
   }
 
@@ -571,6 +601,23 @@ export const handleAuth = async (req, env, domain) => {
     room.members.push(invitee)
     await env.KV.put(`dm:${roomId}`, JSON.stringify(room))
     await addDmToMember(invitee, roomId, env.KV)
+    await broadcastToRooms(JSON.stringify({ type: 'dm_notify' }), env)
+    return json(room)
+  }
+
+  const dmPatchMatch = path.match(/^\/api\/dm\/([^/]+)$/)
+  if (method === 'PATCH' && dmPatchMatch) {
+    const found = await requireSession()
+    if (!found) return json({ error: 'unauthorized' }, 401)
+    const roomId = dmPatchMatch[1]
+    const room = await env.KV.get(`dm:${roomId}`, { type: 'json' })
+    if (!room) return json({ error: 'not found' }, 404)
+    if (!isRoomMember(room, found.pubkey)) return json({ error: 'forbidden' }, 403)
+    let _dp; try { _dp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { description } = _dp
+    if (description === undefined) return json({ error: 'nothing to update' }, 400)
+    room.description = sanitizeDescription(description)
+    await env.KV.put(`dm:${roomId}`, JSON.stringify(room))
     return json(room)
   }
 

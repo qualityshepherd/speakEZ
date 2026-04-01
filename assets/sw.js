@@ -1,10 +1,12 @@
+self.addEventListener('fetch', e => e.respondWith(fetch(e.request)))
+
 self.addEventListener('push', e => {
   const data = e.data?.json?.() || {}
   e.waitUntil(
     self.registration.showNotification(data.title || 'speakEZ', {
       body: data.body || '',
-      icon: '/favicon.svg',
-      badge: '/favicon.svg',
+      icon: '/favicon.png',
+      badge: '/favicon.png',
       tag: data.tag || 'speakez',
       data: { url: data.url || '/' },
       renotify: true

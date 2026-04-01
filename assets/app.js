@@ -1,6 +1,6 @@
 import { state, session } from './state.js'
 import { esc, avatarColor, initial } from './utils.js'
-import { renderSidebar, loadSidebar, switchChannel, dmRooms } from './sidebar.js'
+import { renderSidebar, loadSidebar, switchChannel, dmRooms, unreadChannels } from './sidebar.js'
 import { connect, fetchCustomEmoji } from './chat.js'
 // voice.js loaded for side effects (registers DOM listeners)
 import './voice.js'
@@ -479,7 +479,15 @@ export const showMemberPopover = (member, anchorEl) => {
 document.addEventListener('click', e => {
   if (popoverEl && !popoverEl.contains(e.target)) closePopover()
 })
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closePopover() })
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePopover()
+  if (e.key === 'Escape' && e.shiftKey) {
+    const now = Date.now()
+    for (const id of unreadChannels) state.reads[id] = now
+    unreadChannels.clear()
+    renderSidebar()
+  }
+})
 
 // — Online list —
 export const renderOnline = () => {

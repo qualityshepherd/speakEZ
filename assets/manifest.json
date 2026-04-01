@@ -1,0 +1,18 @@
+{
+  "name": "speakEZ",
+  "short_name": "speakEZ",
+  "description": "Private team chat",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1e1e1e",
+  "background_color": "#1e1e1e",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "1426x1426",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

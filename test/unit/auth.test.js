@@ -12,7 +12,9 @@ import {
   scorePassphrase,
   toHex,
   isValidToken,
-  timingSafeEqual
+  timingSafeEqual,
+  isRateLimited,
+  incrementAttempt
 } from '../../worker/auth.js'
 if (!globalThis.crypto) globalThis.crypto = webcrypto
 
@@ -205,6 +207,56 @@ test('timingSafeEqual: identical strings match', t => {
 
 test('timingSafeEqual: different strings do not match', t => {
   t.falsy(timingSafeEqual('supersecret', 'supersecre!'))
+})
+
+// — isRateLimited —
+
+const NOW = 1000000000000
+
+test('isRateLimited: no record → not limited', t => {
+  t.falsy(isRateLimited(null, NOW, 6))
+})
+
+test('isRateLimited: under limit → not limited', t => {
+  t.falsy(isRateLimited({ count: 5, resetAt: NOW + 60000 }, NOW, 6))
+})
+
+test('isRateLimited: at limit within window → limited', t => {
+  t.ok(isRateLimited({ count: 6, resetAt: NOW + 60000 }, NOW, 6))
+})
+
+test('isRateLimited: over limit within window → limited', t => {
+  t.ok(isRateLimited({ count: 9, resetAt: NOW + 60000 }, NOW, 6))
+})
+
+test('isRateLimited: window expired → not limited', t => {
+  t.falsy(isRateLimited({ count: 6, resetAt: NOW - 1 }, NOW, 6))
+})
+
+// — incrementAttempt —
+
+test('incrementAttempt: no record starts count at 1', t => {
+  const r = incrementAttempt(null, NOW, 720000)
+  t.is(r.count, 1)
+  t.is(r.resetAt, NOW + 720000)
+})
+
+test('incrementAttempt: increments existing count', t => {
+  const r = incrementAttempt({ count: 3, resetAt: NOW + 60000 }, NOW, 720000)
+  t.is(r.count, 4)
+  t.is(r.resetAt, NOW + 60000)
+})
+
+test('incrementAttempt: expired window resets count to 1', t => {
+  const r = incrementAttempt({ count: 6, resetAt: NOW - 1 }, NOW, 720000)
+  t.is(r.count, 1)
+  t.is(r.resetAt, NOW + 720000)
+})
+
+test('incrementAttempt: does not mutate original record', t => {
+  const original = { count: 2, resetAt: NOW + 60000 }
+  incrementAttempt(original, NOW, 720000)
+  t.is(original.count, 2)
 })
 
 test('timingSafeEqual: different lengths do not match', t => {

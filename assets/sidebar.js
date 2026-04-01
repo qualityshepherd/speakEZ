@@ -104,7 +104,11 @@ export const loadSidebar = async () => {
   renderSidebar()
   refreshUnread()
   const activeCh = sidebarData.channels.find(c => c.id === state.activeChannelId)
-  if (activeCh) document.getElementById('room-name').textContent = activeCh.name
+  if (activeCh) {
+    document.getElementById('room-prefix').textContent = '#'
+    document.getElementById('room-name').textContent = activeCh.name
+    setRoomDesc(activeCh.description || '')
+  }
 }
 
 export const renderSidebar = () => {
@@ -284,6 +288,58 @@ export const makeChannel = (ch) => {
   return el
 }
 
+const roomDescEl = document.getElementById('room-desc')
+
+export const setRoomDesc = (desc, editable) => {
+  if (!roomDescEl) return
+  roomDescEl.textContent = desc || ''
+  const canEdit = editable !== undefined ? editable : state.isAdmin
+  roomDescEl.classList.toggle('admin-editable', canEdit)
+}
+
+const DM_DESC_PLACEHOLDER = '@ someone to invite them, or use this as your private room'
+
+roomDescEl?.addEventListener('click', () => {
+  const ch = sidebarData.channels.find(c => c.id === state.activeChannelId)
+  const dm = dmRooms.find(r => r.id === state.activeChannelId)
+  if (!ch && !dm) return
+  if (ch && !state.isAdmin) return
+  const current = ch ? (ch.description || '') : (dm.description || '')
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.value = current
+  input.maxLength = 160
+  input.placeholder = ch ? 'channel description...' : DM_DESC_PLACEHOLDER
+  input.style.cssText = 'font:inherit;font-size:inherit;color:var(--muted);background:none;border:none;border-bottom:1px solid var(--border);outline:none;width:100%;padding:0'
+  roomDescEl.replaceWith(input)
+  input.focus(); input.select()
+  let committed = false
+  const commit = async () => {
+    if (committed) return
+    committed = true
+    const val = input.value.trim()
+    input.replaceWith(roomDescEl)
+    if (val === current) return
+    if (ch) {
+      await apiPatch(`/api/sidebar/channel/${ch.id}`, { description: val })
+      ch.description = val
+    } else {
+      const res = await fetch(`/api/dm/${dm.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...sidebarAuth() },
+        body: JSON.stringify({ description: val })
+      })
+      if (res.ok) dm.description = val
+    }
+    setRoomDesc(val || (dm ? DM_DESC_PLACEHOLDER : ''))
+  }
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit() }
+    else if (e.key === 'Escape') { committed = true; input.replaceWith(roomDescEl) }
+  })
+  input.addEventListener('blur', commit)
+})
+
 export const switchChannel = (id) => {
   if (id === state.activeChannelId) return
   closeSidebar()
@@ -297,7 +353,9 @@ export const switchChannel = (id) => {
         return other ? (state.allMembers.get(other)?.name || other.slice(0, 8)) : 'DM'
       })())
     : null
+  document.getElementById('room-prefix').textContent = dm ? '@' : '#'
   document.getElementById('room-name').textContent = ch?.name || dmName || id
+  setRoomDesc(dm ? (dm.description || DM_DESC_PLACEHOLDER) : (ch?.description || ''), !!dm || state.isAdmin)
   chat.closeSearch()
   document.getElementById('messages').innerHTML = ''
   renderSidebar()
