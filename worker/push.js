@@ -1,8 +1,11 @@
 // Web Push implementation — RFC 8030 + RFC 8291 (aes128gcm) + RFC 8292 (VAPID)
 
-const b64url = buf =>
-  btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+const b64url = buf => {
+  let binary = ''
+  const bytes = new Uint8Array(buf)
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+}
 
 const fromB64url = s =>
   Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))
@@ -44,11 +47,9 @@ async function encryptPayload (subscription, plaintext) {
   ))
   const authSecret = fromB64url(subscription.keys.auth)
 
-  // RFC 8291 §3.1 — derive IKM
   const prkKey = await hmac(authSecret, ecdhSecret)
   const ikm = await hkdfExpand(prkKey, cat(te.encode('WebPush: info\x00'), clientPubRaw, serverPubRaw), 32)
 
-  // RFC 8188 §2.1 — derive CEK + nonce
   const prkSalt = await hmac(salt, ikm)
   const cek = await hkdfExpand(prkSalt, te.encode('Content-Encoding: aes128gcm\x00'), 16)
   const nonce = await hkdfExpand(prkSalt, te.encode('Content-Encoding: nonce\x00'), 12)
@@ -56,10 +57,9 @@ async function encryptPayload (subscription, plaintext) {
   const aesKey = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt'])
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonce }, aesKey,
-    cat(te.encode(plaintext), new Uint8Array([2])) // 0x02 = end-of-record pad
+    cat(te.encode(plaintext), new Uint8Array([2]))
   ))
 
-  // aes128gcm header: salt(16) | rs(4 BE) | idlen(1) | keyid(65)
   const rs = new Uint8Array(4); new DataView(rs.buffer).setUint32(0, 4096, false)
   return cat(salt, rs, new Uint8Array([65]), serverPubRaw, ciphertext)
 }
@@ -69,11 +69,22 @@ async function vapidJwt (endpoint, privateKeyJwk, subject) {
   const hdr = b64url(te.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })))
   const pay = b64url(te.encode(JSON.stringify({ aud: origin, exp: Math.floor(Date.now() / 1000) + 43200, sub: subject })))
   const key = await crypto.subtle.importKey('jwk', privateKeyJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
-  const sig = b64url(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(`${hdr}.${pay}`)))
+
+  const derSig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(`${hdr}.${pay}`)))
+  const rLen = derSig[3]
+  const rStart = 4 + (rLen === 33 ? 1 : 0)
+  const sLenIdx = 4 + rLen
+  const sLen = derSig[sLenIdx + 1]
+  const sStart = sLenIdx + 2 + (sLen === 33 ? 1 : 0)
+
+  const rawSig = new Uint8Array(64)
+  rawSig.set(derSig.slice(rStart, rStart + 32), 0)
+  rawSig.set(derSig.slice(sStart, sStart + 32), 32)
+
+  const sig = b64url(rawSig)
   return `${hdr}.${pay}.${sig}`
 }
 
-// payload: { title, body, url, tag }
 export async function sendPush (subscription, payload, env) {
   if (!env.VAPID_PRIVATE_KEY_JWK || !env.VAPID_PUBLIC_KEY) return
   try {
@@ -91,6 +102,12 @@ export async function sendPush (subscription, payload, env) {
       },
       body
     })
+
     if (res.status === 410 || res.status === 404) return { expired: true }
-  } catch {}
+    if (!res.ok) return { error: true }
+
+    return { ok: true }
+  } catch {
+    return { error: true }
+  }
 }

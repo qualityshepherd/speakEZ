@@ -2,7 +2,8 @@ import { unit as test } from '../testpup.js'
 import {
   UPLOAD_EXT_MAP,
   getUploadExt,
-  parseUploadContentType
+  parseUploadContentType,
+  sanitizeUploadKey
 } from '../../worker/auth.js'
 import { emojiKeyToName, emojiKeyToUrl } from '../../worker/index.js'
 
@@ -94,6 +95,40 @@ test('UPLOAD_EXT_MAP: all values are non-empty strings', t => {
   for (const [, ext] of Object.entries(UPLOAD_EXT_MAP)) {
     t.ok(typeof ext === 'string' && ext.length > 0)
   }
+})
+
+// — sanitizeUploadKey —
+
+test('sanitizeUploadKey: valid path passes through', t => {
+  t.is(sanitizeUploadKey('images/abc123.jpg'), 'images/abc123.jpg')
+})
+
+test('sanitizeUploadKey: valid audio path passes through', t => {
+  t.is(sanitizeUploadKey('audio/abc123.webm'), 'audio/abc123.webm')
+})
+
+test('sanitizeUploadKey: path traversal returns null', t => {
+  t.is(sanitizeUploadKey('../../etc/passwd'), null)
+})
+
+test('sanitizeUploadKey: traversal mid-path returns null', t => {
+  t.is(sanitizeUploadKey('images/../../../etc/passwd'), null)
+})
+
+test('sanitizeUploadKey: null byte returns null', t => {
+  t.is(sanitizeUploadKey('images/foo\x00bar.jpg'), null)
+})
+
+test('sanitizeUploadKey: leading slash returns null', t => {
+  t.is(sanitizeUploadKey('/images/foo.jpg'), null)
+})
+
+test('sanitizeUploadKey: empty string returns null', t => {
+  t.is(sanitizeUploadKey(''), null)
+})
+
+test('sanitizeUploadKey: UUID filename is valid', t => {
+  t.is(sanitizeUploadKey('images/550e8400-e29b-41d4-a716-446655440000.jpg'), 'images/550e8400-e29b-41d4-a716-446655440000.jpg')
 })
 
 // — emojiKeyToName —

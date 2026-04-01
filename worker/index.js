@@ -17,6 +17,10 @@ export default {
     const url = new URL(req.url)
     const path = url.pathname
 
+    if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
+      return new Response('method not allowed', { status: 405 })
+    }
+
     if (AUTH_PATHS.some(p => path.startsWith(p))) {
       return handleAuth(req, env, url.hostname)
     }
@@ -39,7 +43,9 @@ export default {
 
     if (path.startsWith('/emoji/')) {
       if (!env.BACKUP) return new Response('not found', { status: 404 })
-      const key = 'emoji/' + decodeURIComponent(path.slice(7))
+      const rawKey = decodeURIComponent(path.slice(7))
+      if (!rawKey || rawKey.includes('..') || rawKey.includes('/') || rawKey.includes('\x00')) return new Response('not found', { status: 404 })
+      const key = 'emoji/' + rawKey
       const obj = await env.BACKUP.get(key)
       if (!obj) return new Response('not found', { status: 404 })
       const headers = new Headers()
@@ -70,7 +76,7 @@ export default {
       const dmRoom = await env.KV.get(`dm:${room}`, { type: 'json' })
       if (dmRoom) {
         if (!isRoomMember(dmRoom, found.pubkey)) return new Response('forbidden', { status: 403 })
-        await env.KV.put(`dm:${room}`, JSON.stringify({ ...dmRoom, lastActivity: Date.now() }))
+        ctx.waitUntil(env.KV.put(`dm:${room}`, JSON.stringify({ ...dmRoom, lastActivity: Date.now() })))
       }
 
       const id = env.CHAT_ROOM.idFromName(room)

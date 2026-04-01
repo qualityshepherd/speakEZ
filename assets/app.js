@@ -215,7 +215,10 @@ const subscribe = async () => {
       body: JSON.stringify(sub.toJSON())
     })
     notifyMsg.textContent = ''
-  } catch { notifyMsg.textContent = 'subscription failed'; notifyBox.checked = false }
+  } catch {
+    notifyMsg.textContent = 'subscription failed'
+    notifyBox.checked = false
+  }
 }
 
 const unsubscribe = async () => {

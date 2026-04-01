@@ -4,9 +4,28 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>speakEZ</title>
+  <script>if (!JSON.parse(localStorage.getItem('session') || 'null')) document.documentElement.classList.add('no-session')</script>
   <link rel="stylesheet" href="/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
+    @keyframes speakez-load {
+      0%   { transform: rotate(0deg) }
+      20%  { transform: rotate(360deg) }
+      60%  { transform: rotate(360deg) }
+      80%  { transform: rotate(720deg) }
+      100% { transform: rotate(720deg) }
+    }
+    .chat-spinner {
+      display: flex; align-items: center; justify-content: center;
+      height: 100%; opacity: 0.35;
+    }
+    .chat-spinner-img {
+      width: 40px; height: 40px;
+      animation: speakez-load 2.4s ease-in-out infinite;
+    }
+
+    html.no-session body { visibility: hidden }
+
     * { box-sizing: border-box; }
 
     body {

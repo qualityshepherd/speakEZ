@@ -35,7 +35,10 @@ export const peerVideoTracks = new Map()
 export const sessionTracks = new Map()
 export const hiddenVideoPeers = new Set()
 
-const SESSION_MIME = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
+const SESSION_MIME = (() => {
+  const prefer = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+  return prefer.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm'
+})()
 
 let audioConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
 let gateThreshold = 0.7
@@ -468,15 +471,49 @@ const restartStream = async (deviceId) => {
 }
 
 // — Session recording —
-const startTrackRecording = (pubkey, sourceNode, name) => {
+const startTrackRecording = (pubkey, sourceNode, name, videoTrack) => {
   if (!remoteCtx || sessionTracks.has(pubkey)) return
   const dest = remoteCtx.createMediaStreamDestination()
   sourceNode.connect(dest)
+
+  // Canvas for stable video — falls back to avatar when camera off
+  const canvas = document.createElement('canvas')
+  canvas.width = 320; canvas.height = 240
+  const ctx2d = canvas.getContext('2d')
+  const color = avatarColor(pubkey)
+  const drawAvatar = () => {
+    ctx2d.fillStyle = '#1a1a1a'; ctx2d.fillRect(0, 0, 320, 240)
+    ctx2d.fillStyle = color; ctx2d.beginPath(); ctx2d.arc(160, 95, 58, 0, Math.PI * 2); ctx2d.fill()
+    ctx2d.fillStyle = '#fff'; ctx2d.font = 'bold 54px sans-serif'
+    ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle'
+    ctx2d.fillText((name || '?')[0].toUpperCase(), 160, 95)
+  }
+  let liveVideo = false
+  let frameTimer = null
+  if (videoTrack && videoTrack.readyState !== 'ended') {
+    const vid = document.createElement('video')
+    vid.muted = true; vid.autoplay = true; vid.playsInline = true
+    vid.srcObject = new MediaStream([videoTrack])
+    vid.play().catch(() => {})
+    liveVideo = true
+    videoTrack.addEventListener('ended', () => { liveVideo = false })
+    frameTimer = setInterval(() => {
+      if (liveVideo && vid.readyState >= 2) ctx2d.drawImage(vid, 0, 0, 320, 240)
+      else drawAvatar()
+    }, 1000 / 30)
+  } else {
+    drawAvatar()
+    frameTimer = setInterval(drawAvatar, 1000)
+  }
+
+  const canvasTrack = canvas.captureStream(30).getVideoTracks()[0]
+  const recStream = new MediaStream([...dest.stream.getAudioTracks(), canvasTrack])
   const mimeType = SESSION_MIME
-  const rec = new MediaRecorder(dest.stream, { mimeType })
+  const rec = new MediaRecorder(recStream, { mimeType })
   const chunks = []
   rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
   rec.onstop = () => {
+    clearInterval(frameTimer)
     const blob = new Blob(chunks, { type: rec.mimeType })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -496,11 +533,12 @@ export const startSessionRecording = () => {
   if (!remoteCtx || sessionTracks.size > 0) return
   if (gatedStream) {
     const localSrc = remoteCtx.createMediaStreamSource(gatedStream)
-    startTrackRecording('__local__', localSrc, session.member?.name || localStorage.getItem('name') || 'me')
+    const localVideo = localVideoStream?.getVideoTracks()[0]
+    startTrackRecording('__local__', localSrc, session.member?.name || localStorage.getItem('name') || 'me', localVideo)
   }
   for (const [pubkey, gainNode] of peerGains) {
     const name = voiceMembers.get(pubkey)?.name || pubkey.slice(0, 8)
-    startTrackRecording(pubkey, gainNode, name)
+    startTrackRecording(pubkey, gainNode, name, peerVideoTracks.get(pubkey))
   }
   voiceRecBtn.classList.add('recording')
   renderVoiceBar()

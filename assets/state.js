@@ -1,5 +1,6 @@
 export const session = JSON.parse(localStorage.getItem('session') || 'null')
 if (!session) { location.href = '/login.html'; throw new Error() }
+document.documentElement.classList.remove('no-session')
 
 export const state = {
   isAdmin: false,

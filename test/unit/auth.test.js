@@ -11,7 +11,8 @@ import {
   isSessionValid,
   scorePassphrase,
   toHex,
-  isValidToken
+  isValidToken,
+  timingSafeEqual
 } from '../../worker/auth.js'
 if (!globalThis.crypto) globalThis.crypto = webcrypto
 
@@ -196,4 +197,24 @@ test('deriveKeypair: same phrase different domain = different pubkey', async t =
   const a = await deriveKeypair('correct horse battery staple', 'brine.dev')
   const b = await deriveKeypair('correct horse battery staple', 'other.dev')
   t.not(a.pubkey, b.pubkey)
+})
+
+test('timingSafeEqual: identical strings match', t => {
+  t.ok(timingSafeEqual('supersecret', 'supersecret'))
+})
+
+test('timingSafeEqual: different strings do not match', t => {
+  t.falsy(timingSafeEqual('supersecret', 'supersecre!'))
+})
+
+test('timingSafeEqual: different lengths do not match', t => {
+  t.falsy(timingSafeEqual('short', 'longer-string'))
+})
+
+test('timingSafeEqual: empty strings match', t => {
+  t.ok(timingSafeEqual('', ''))
+})
+
+test('timingSafeEqual: empty vs non-empty do not match', t => {
+  t.falsy(timingSafeEqual('', 'x'))
 })

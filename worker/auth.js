@@ -27,16 +27,30 @@ export const UPLOAD_EXT_MAP = {
 export const parseUploadContentType = (header) => (header || '').split(';')[0].trim()
 export const getUploadExt = (contentType) => UPLOAD_EXT_MAP[contentType] || null
 
+export const sanitizeUploadKey = (key) => {
+  if (!key || key.includes('\x00') || key.startsWith('/') || key.includes('..')) return null
+  return key
+}
+
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
     headers: { 'Content-Type': 'application/json' }
   })
 
+export const timingSafeEqual = (a, b) => {
+  const te = new TextEncoder()
+  const ab = te.encode(a); const bb = te.encode(b)
+  if (ab.length !== bb.length) return false
+  let diff = 0
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i]
+  return diff === 0
+}
+
 const adminAuthorized = (req, env) => {
   const auth = req.headers?.get?.('authorization')
-  const token = auth?.replace('Bearer ', '')
-  return !!token && token === env.ADMIN_SECRET
+  const token = auth?.replace('Bearer ', '') || ''
+  return !!(env.ADMIN_SECRET) && timingSafeEqual(token, env.ADMIN_SECRET)
 }
 
 export const isAdminPubkey = (pubkey, env) =>
@@ -137,7 +151,9 @@ export const handleAuth = async (req, env, domain) => {
         r2Options.range = m[2] ? { offset, length: parseInt(m[2]) - offset + 1 } : { offset }
       }
     }
-    const obj = await env.BACKUP.get(`uploads/${uploadMatch[1]}`, r2Options)
+    const safeKey = sanitizeUploadKey(uploadMatch[1])
+    if (!safeKey) return new Response('not found', { status: 404 })
+    const obj = await env.BACKUP.get(`uploads/${safeKey}`, r2Options)
     if (!obj) return new Response('not found', { status: 404 })
     const contentType = obj.httpMetadata?.contentType || 'application/octet-stream'
     const headers = {
@@ -161,6 +177,8 @@ export const handleAuth = async (req, env, domain) => {
     const contentType = parseUploadContentType(req.headers?.get?.('content-type'))
     const ext = getUploadExt(contentType)
     if (!ext) return json({ error: 'unsupported file type' }, 400)
+    const contentLength = parseInt(req.headers?.get?.('content-length') || '0', 10)
+    if (contentLength > 10 * 1024 * 1024) return json({ error: 'too large' }, 413)
     const body = await req.arrayBuffer()
     if (body.byteLength > 10 * 1024 * 1024) return json({ error: 'too large' }, 413)
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -185,10 +203,14 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'GET' && path === '/api/invite') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    const list = await env.KV.list({ prefix: 'invite:' })
+    const list = await env.KV.list({ prefix: 'invite:', metadata: true })
     const invites = []
     for (const key of (list.keys || [])) {
-      const invite = await env.KV.get(key.name, { type: 'json' })
+      const meta = key.metadata
+      // Fall back to full GET for older invites written without metadata
+      const invite = meta?.code
+        ? { code: meta.code, expires: meta.expires, used: meta.used }
+        : await env.KV.get(key.name, { type: 'json' })
       if (!invite || !isValidToken(invite.code, domain)) continue
       const status = invite.used ? 'used' : invite.expires <= Date.now() ? 'expired' : 'fresh'
       invites.push({ ...invite, status })
@@ -212,12 +234,15 @@ export const handleAuth = async (req, env, domain) => {
     const memberFound = await requireSession()
     if (!memberFound && !adminAuthorized(req, env)) return json({ error: 'unauthorized' }, 401)
     const invite = makeInvite(domain)
-    await env.KV.put(`invite:${invite.code}`, JSON.stringify(invite))
+    await env.KV.put(`invite:${invite.code}`, JSON.stringify(invite), {
+      metadata: { code: invite.code, expires: invite.expires, used: false }
+    })
     return json(invite)
   }
 
   if (method === 'POST' && path === '/api/register') {
-    const { code, pubkey, name } = await req.json()
+    let _reg; try { _reg = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { code, pubkey, name } = _reg
     if (!isValidToken(code, domain)) return json({ error: 'invalid invite' }, 400)
     const invite = await env.KV.get(`invite:${code}`, { type: 'json' })
     if (!isInviteValid(invite)) return json({ error: 'invalid invite' }, 400)
@@ -245,7 +270,8 @@ export const handleAuth = async (req, env, domain) => {
   }
 
   if (method === 'POST' && path === '/api/login') {
-    const { pubkey, challenge, sig } = await req.json()
+    let _login; try { _login = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { pubkey, challenge, sig } = _login
     const member = await env.KV.get(pubkey, { type: 'json' })
     if (!member) return json({ error: 'not found' }, 404)
     const valid = await verifyChallenge(challenge, sig, pubkey)
@@ -264,7 +290,8 @@ export const handleAuth = async (req, env, domain) => {
       return json({ pubkey: found.pubkey, name: found.member.name, avatar: found.member.avatar, isAdmin: isAdminPubkey(found.pubkey, env) })
     }
     if (method === 'POST') {
-      const { name, avatar } = await req.json()
+      let _me; try { _me = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+      const { name, avatar } = _me
       await env.KV.put(found.pubkey, JSON.stringify({ ...found.member, name: name || null, avatar: avatar || null }))
       await updateMembersIndex(found.pubkey, { name: name || null, avatar: avatar || null }, env.KV)
       await broadcastToRooms(JSON.stringify({ type: 'profile', pubkey: found.pubkey, name: name || null, avatar: avatar || null }), env)
@@ -291,7 +318,8 @@ export const handleAuth = async (req, env, domain) => {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
-    const { name } = await req.json()
+    let _sc; try { _sc = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { name } = _sc
     if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
     const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)
@@ -306,7 +334,8 @@ export const handleAuth = async (req, env, domain) => {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
-    const { name, type, category } = await req.json()
+    let _sch; try { _sch = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { name, type, category } = _sch
     if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
     if (!['text', 'voice'].includes(type)) return json({ error: 'invalid type' }, 400)
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
@@ -324,7 +353,8 @@ export const handleAuth = async (req, env, domain) => {
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
     const id = categoryPatchMatch[1]
-    const { name } = await req.json()
+    let _cp; try { _cp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { name } = _cp
     if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
     const cat = sidebar.categories.find(c => c.id === id)
@@ -341,7 +371,8 @@ export const handleAuth = async (req, env, domain) => {
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
     const id = channelPatchMatch[1]
-    const { name } = await req.json()
+    let _chp; try { _chp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { name } = _chp
     if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
     const ch = sidebar.channels.find(c => c.id === id)
@@ -416,7 +447,7 @@ export const handleAuth = async (req, env, domain) => {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
-    const body = await req.json()
+    let body; try { body = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const workspaceName = (body.workspaceName || '').trim().slice(0, 64)
     if (!workspaceName) return json({ error: 'name required' }, 400)
     const config = (await env.KV.get('config', { type: 'json' })) || {}
@@ -464,7 +495,8 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'POST' && path === '/api/dm') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    const { members: invited = [], name } = await req.json()
+    let _dm; try { _dm = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { members: invited = [], name } = _dm
     const allMembers = [...new Set([found.pubkey, ...invited.filter(p => typeof p === 'string')])]
 
     // 1:1: return existing room if one exists, re-adding caller if they left
@@ -532,7 +564,8 @@ export const handleAuth = async (req, env, domain) => {
     const room = await env.KV.get(`dm:${roomId}`, { type: 'json' })
     if (!room) return json({ error: 'not found' }, 404)
     if (!isRoomMember(room, found.pubkey)) return json({ error: 'forbidden' }, 403)
-    const { pubkey: invitee } = await req.json()
+    let _inv; try { _inv = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { pubkey: invitee } = _inv
     if (typeof invitee !== 'string') return json({ error: 'invalid pubkey' }, 400)
     if (room.members.includes(invitee)) return json(room)
     room.members.push(invitee)
@@ -570,7 +603,7 @@ export const handleAuth = async (req, env, domain) => {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (method === 'POST') {
-      const sub = await req.json()
+      let sub; try { sub = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
       if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return json({ error: 'invalid subscription' }, 400)
       await env.KV.put(`push:${found.pubkey}`, JSON.stringify(sub))
       return json({ ok: true })

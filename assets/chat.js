@@ -151,9 +151,7 @@ export const renderMessage = ({ id, from, text, ts, replyTo: msgReplyTo }) => {
     if (!oldestTs || ts < oldestTs || (ts === oldestTs && id < oldestId)) { oldestTs = ts; oldestId = id }
     return
   }
-  clearTimeout(pendingEmptyTimer)
-  const empty = messagesEl.querySelector('.empty')
-  if (empty) empty.remove()
+  messagesEl.querySelector('.empty, .chat-spinner')?.remove()
 
   if (!unreadDividerShown && lastReadTs > 0 && ts > lastReadTs) {
     unreadDividerShown = true
@@ -210,7 +208,7 @@ export const renderMessage = ({ id, from, text, ts, replyTo: msgReplyTo }) => {
     }
   })
 
-  if (id) bindMessageActions(el, id, from, text, ts, isOwn)
+  if (id) bindMessageActions(el, id, from, text, ts, isOwn, isDice)
   messagesEl.appendChild(el)
   messagesEl.scrollTop = messagesEl.scrollHeight
   if (Date.now() - ts < 10000) notifyIfNeeded(from, text, msgReplyTo)
@@ -265,7 +263,7 @@ const prependMessage = (msg) => {
       </div>
       <div class="msg-text${isDice ? ' dice' : ''}">${renderText(text)}</div>
     </div>`
-  bindMessageActions(el, id, from, text, ts, isOwn)
+  bindMessageActions(el, id, from, text, ts, isOwn, isDice)
   const btn = document.getElementById('load-more-btn')
   btn ? btn.after(el) : messagesEl.prepend(el)
   fetchOGPreviews(el, text)
@@ -359,12 +357,40 @@ const SVG_REPLY = '<svg viewBox="0 0 24 24" width="16" height="16" fill="current
 const SVG_EDIT = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>'
 const SVG_DELETE = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>'
 
-const bindMessageActions = (el, id, from, text, ts, isOwn) => {
+const showDiceBotModal = () => {
+  let modal = document.getElementById('dice-bot-modal')
+  if (!modal) {
+    modal = document.createElement('div')
+    modal.id = 'dice-bot-modal'
+    modal.className = 'me-modal'
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center'
+    modal.innerHTML = `
+      <div class="me-modal-inner" style="max-width:340px;width:90%">
+        <button class="ghost me-close" id="dice-bot-close" style="position:absolute;top:12px;right:12px">✕</button>
+        <div style="text-align:center;padding:24px 16px 16px">
+          <img src="/images/dice/6.svg" style="width:64px;height:64px;margin-bottom:12px">
+          <div style="font-size:1.1em;font-weight:600;margin-bottom:4px">🎲 Dice Bot</div>
+          <div style="font-size:.85em;color:var(--muted);margin-bottom:16px">A bot that rolls dice for you.</div>
+          <div style="font-size:.8em;color:var(--muted);text-align:left;line-height:1.6">
+            Type a roll expression and hit send:<br>
+            <code>d20</code> · <code>2d6+3</code> · <code>d6n</code> · <code>3#d6</code>
+          </div>
+        </div>
+      </div>`
+    document.body.appendChild(modal)
+    modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none' })
+    modal.querySelector('#dice-bot-close').addEventListener('click', () => { modal.style.display = 'none' })
+  }
+  modal.style.display = 'flex'
+}
+
+const bindMessageActions = (el, id, from, text, ts, isOwn, isDice) => {
   const avatarCol = el.querySelector('.msg-avatar-col')
   if (avatarCol) {
     avatarCol.style.cursor = 'pointer'
     avatarCol.addEventListener('click', e => {
       e.stopPropagation()
+      if (isDice) { showDiceBotModal(); return }
       import('./app.js').then(({ showMemberPopover }) => {
         const member = state.allMembers.get(from.pubkey) || from
         showMemberPopover(member, avatarCol)
@@ -413,6 +439,8 @@ const bindMessageActions = (el, id, from, text, ts, isOwn) => {
   actions.appendChild(mkBtn('Reply', SVG_REPLY, '', () => setReply({ id, from, text, ts })))
   if (isOwn) {
     actions.appendChild(mkBtn('Edit', SVG_EDIT, '', () => startEdit(el, id, text)))
+  }
+  if (isOwn || state.isAdmin) {
     actions.appendChild(mkBtn('Delete', SVG_DELETE, 'danger', () => {
       if (!confirmDelete()) return
       if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'delete', id }))
@@ -606,12 +634,10 @@ export const clearReply = () => {
 document.getElementById('reply-cancel').addEventListener('click', clearReply)
 
 // — WebSocket —
-let pendingEmptyTimer = null
 const isTouchDevice = () => window.matchMedia('(hover: none) and (pointer: coarse)').matches
 
 export const connect = (room = state.activeChannelId) => {
   clearTimeout(reconnectTimer)
-  clearTimeout(pendingEmptyTimer)
   if (state.ws) {
     state.ws.onclose = null; state.ws.onerror = null; state.ws.onmessage = null
     if (state.ws.readyState !== WebSocket.CLOSED) state.ws.close()
@@ -623,11 +649,7 @@ export const connect = (room = state.activeChannelId) => {
   if (!reconnecting) { historyHasMore = false; oldestTs = null; oldestId = null }
   state.onlineMembers.clear()
   typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
-  pendingEmptyTimer = setTimeout(() => {
-    if (!messagesEl.querySelector('[data-id]')) {
-      messagesEl.innerHTML = '<div class="empty">nothing here yet.<br>say something.</div>'
-    }
-  }, 600)
+  messagesEl.innerHTML = '<div class="chat-spinner"><img src="/favicon.png" class="chat-spinner-img" alt=""></div>'
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   state.ws = new WebSocket(`${proto}//${location.host}/api/ws?token=${encodeURIComponent(session.token)}&room=${encodeURIComponent(room)}`)
 
@@ -701,6 +723,10 @@ export const connect = (room = state.activeChannelId) => {
         import('./sidebar.js').then(({ loadSidebar }) => loadSidebar())
       } else if (msg.type === 'history_start') {
         historyHasMore = !!msg.hasMore
+        messagesEl.querySelector('.chat-spinner')?.remove()
+        if (!msg.hasMore && !messagesEl.querySelector('[data-id]')) {
+          messagesEl.innerHTML = '<div class="empty">nothing here yet.<br>say something.</div>'
+        }
         renderLoadMore()
       } else if (msg.type === 'history_chunk') {
         historyHasMore = !!msg.hasMore

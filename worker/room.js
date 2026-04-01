@@ -1,7 +1,13 @@
 import { sendPush } from './push.js'
 
-export const sanitizeFtsQuery = (q) =>
-  q.replace(/["*^+\-()[\]:]/g, ' ').replace(/\s+/g, ' ').trim()
+export const sanitizeFtsQuery = (q) => {
+  const specials = '"*+-().[]:^$|\\'
+  return specials
+    .split('')
+    .reduce((acc, char) => acc.split(char).join(' '), q)
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
 export const parseMentions = (text, members) => {
   const handles = (text.match(/@(\S+)/g) || []).map(m => m.slice(1).toLowerCase())
