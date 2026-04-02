@@ -5,9 +5,15 @@ import * as voice from './voice.js'
 import * as chat from './chat.js'
 
 export const voiceIcon = '<svg viewBox="0 0 24 24" width="1.3em" height="1.3em" fill="currentColor" style="display:block"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>'
+export const threadIcon = '<svg viewBox="0 0 24 24" width="1.1em" height="1.1em" fill="currentColor" style="display:block"><path d="M15 4v7H5.17L4 12.17V4h11m1-2H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1V3c0-.55-.45-1-1-1zm5 4h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1z"/></svg>'
 
 export let sidebarData = { categories: [], channels: [{ id: 'general', name: 'general', type: 'text', category: null }] }
 export let dmRooms = []
+export let threadRooms = []
+
+const getDismissedThreads = () => { try { return JSON.parse(localStorage.getItem('dismissed_threads') || '[]') } catch { return [] } }
+const dismissThread = (id) => { const d = getDismissedThreads(); if (!d.includes(id)) { d.push(id); localStorage.setItem('dismissed_threads', JSON.stringify(d)) } }
+const undismissThread = (id) => { localStorage.setItem('dismissed_threads', JSON.stringify(getDismissedThreads().filter(x => x !== id))) }
 export const collapsed = new Set()
 export const unreadChannels = new Set()
 
@@ -76,9 +82,11 @@ export const apiPost = async (path, body) => {
 
 // — Unread —
 export const refreshUnread = async () => {
+  const dismissed = getDismissedThreads()
   const roomIds = [
     ...sidebarData.channels.filter(c => c.type === 'text' && c.id !== state.activeChannelId).map(c => c.id),
-    ...dmRooms.filter(r => r.id !== state.activeChannelId).map(r => r.id)
+    ...dmRooms.filter(r => r.id !== state.activeChannelId).map(r => r.id),
+    ...threadRooms.filter(t => t.id !== state.activeChannelId && !dismissed.includes(t.id)).map(t => t.id)
   ]
   for (const roomId of roomIds) {
     try {
@@ -94,12 +102,14 @@ export const refreshUnread = async () => {
 
 export const loadSidebar = async () => {
   try {
-    const [sidebarRes, dmRes] = await Promise.all([
+    const [sidebarRes, dmRes, threadRes] = await Promise.all([
       fetch('/api/sidebar', { headers: sidebarAuth() }),
-      fetch('/api/dm', { headers: sidebarAuth() })
+      fetch('/api/dm', { headers: sidebarAuth() }),
+      fetch('/api/threads', { headers: sidebarAuth() })
     ])
     if (sidebarRes.ok) sidebarData = await sidebarRes.json()
     if (dmRes.ok) dmRooms = await dmRes.json()
+    if (threadRes.ok) threadRooms = await threadRes.json()
   } catch {}
   renderSidebar()
   refreshUnread()
@@ -184,6 +194,37 @@ export const renderSidebar = () => {
     nav.appendChild(wrap)
   }
 
+  // Threads section
+  {
+    const threadSection = document.createElement('div')
+    threadSection.className = 'category'
+    const threadHeader = document.createElement('div')
+    threadHeader.className = 'category-header'
+    threadHeader.innerHTML = '<span class="category-name">THREADS</span><button class="category-add" title="new thread">+</button>'
+    threadHeader.querySelector('.category-add').addEventListener('click', async e => {
+      e.stopPropagation()
+      const name = prompt('Thread topic:')?.trim()
+      if (!name) return
+      const res = await fetch('/api/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...sidebarAuth() },
+        body: JSON.stringify({ name })
+      })
+      if (!res.ok) return
+      const thread = await res.json()
+      if (!threadRooms.find(t => t.id === thread.id)) threadRooms.push(thread)
+      undismissThread(thread.id)
+      renderSidebar()
+      switchChannel(thread.id)
+    })
+    threadSection.appendChild(threadHeader)
+    const dismissed = getDismissedThreads()
+    for (const thread of threadRooms.filter(t => !dismissed.includes(t.id))) {
+      threadSection.appendChild(makeThreadItem(thread))
+    }
+    nav.appendChild(threadSection)
+  }
+
   // DMs section
   {
     const dmSection = document.createElement('div')
@@ -228,6 +269,34 @@ export const makeDmItem = (room) => {
     if (room.id === state.activeChannelId) switchChannel('general')
     await fetch(`/api/dm/${room.id}`, { method: 'DELETE', headers: sidebarAuth() })
     dmRooms = dmRooms.filter(r => r.id !== room.id)
+    renderSidebar()
+  })
+  return el
+}
+
+export const makeThreadItem = (thread) => {
+  const el = document.createElement('div')
+  el.className = `channel-item${thread.id === state.activeChannelId ? ' active' : ''}`
+  const unread = unreadChannels.has(thread.id) ? '<span class="channel-unread" aria-label="unread messages"></span>' : ''
+  const canClose = state.isAdmin || thread.createdBy === session?.pubkey
+  const closeBtn = canClose
+    ? `<button class="channel-del" title="close thread">×</button>`
+    : `<button class="channel-del dm-leave-btn" title="Leave thread"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z"/></svg></button>`
+  el.innerHTML = `<span class="channel-icon">${threadIcon}</span><span class="channel-name">${esc(thread.name)}</span>${unread}${closeBtn}`
+  el.addEventListener('click', e => {
+    if (e.target.classList.contains('channel-del')) return
+    switchChannel(thread.id)
+  })
+  el.querySelector('.channel-del').addEventListener('click', async e => {
+    e.stopPropagation()
+    if (thread.id === state.activeChannelId) switchChannel('general')
+    if (canClose) {
+      if (!confirm(`close thread "${thread.name}"?`)) return
+      await fetch(`/api/threads/${thread.id}`, { method: 'DELETE', headers: sidebarAuth() })
+      threadRooms = threadRooms.filter(t => t.id !== thread.id)
+    } else {
+      dismissThread(thread.id)
+    }
     renderSidebar()
   })
   return el
@@ -302,14 +371,15 @@ const DM_DESC_PLACEHOLDER = '@ someone to invite them, or use this as your priva
 roomDescEl?.addEventListener('click', () => {
   const ch = sidebarData.channels.find(c => c.id === state.activeChannelId)
   const dm = dmRooms.find(r => r.id === state.activeChannelId)
-  if (!ch && !dm) return
+  const thread = threadRooms.find(t => t.id === state.activeChannelId)
+  if (!ch && !dm && !thread) return
   if (ch && !state.isAdmin) return
-  const current = ch ? (ch.description || '') : (dm.description || '')
+  const current = ch ? (ch.description || '') : dm ? (dm.description || '') : (thread.description || '')
   const input = document.createElement('input')
   input.type = 'text'
   input.value = current
   input.maxLength = 160
-  input.placeholder = ch ? 'channel description...' : DM_DESC_PLACEHOLDER
+  input.placeholder = ch ? 'channel description...' : thread ? 'thread topic...' : DM_DESC_PLACEHOLDER
   input.style.cssText = 'font:inherit;font-size:inherit;color:var(--muted);background:none;border:none;border-bottom:1px solid var(--border);outline:none;width:100%;padding:0'
   roomDescEl.replaceWith(input)
   input.focus(); input.select()
@@ -323,15 +393,22 @@ roomDescEl?.addEventListener('click', () => {
     if (ch) {
       await apiPatch(`/api/sidebar/channel/${ch.id}`, { description: val })
       ch.description = val
-    } else {
+    } else if (dm) {
       const res = await fetch(`/api/dm/${dm.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...sidebarAuth() },
         body: JSON.stringify({ description: val })
       })
       if (res.ok) dm.description = val
+    } else if (thread) {
+      const res = await fetch(`/api/threads/${thread.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...sidebarAuth() },
+        body: JSON.stringify({ description: val })
+      })
+      if (res.ok) thread.description = val
     }
-    setRoomDesc(val || (dm ? DM_DESC_PLACEHOLDER : ''))
+    setRoomDesc(val || (dm ? DM_DESC_PLACEHOLDER : ''), !!(dm || thread) || state.isAdmin)
   }
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); commit() }
@@ -353,9 +430,13 @@ export const switchChannel = (id) => {
         return other ? (state.allMembers.get(other)?.name || other.slice(0, 8)) : 'DM'
       })())
     : null
-  document.getElementById('room-prefix').textContent = dm ? '@' : '#'
-  document.getElementById('room-name').textContent = ch?.name || dmName || id
-  setRoomDesc(dm ? (dm.description || DM_DESC_PLACEHOLDER) : (ch?.description || ''), !!dm || state.isAdmin)
+  const thread = threadRooms.find(t => t.id === id)
+  const prefixEl = document.getElementById('room-prefix')
+  if (thread) prefixEl.innerHTML = threadIcon
+  else { prefixEl.innerHTML = ''; prefixEl.textContent = dm ? '@' : '#' }
+  document.getElementById('room-name').textContent = ch?.name || dmName || thread?.name || id
+  const desc = dm ? (dm.description || DM_DESC_PLACEHOLDER) : thread ? (thread.description || '') : (ch?.description || '')
+  setRoomDesc(desc, !!dm || !!thread || state.isAdmin)
   chat.closeSearch()
   document.getElementById('messages').innerHTML = ''
   renderSidebar()

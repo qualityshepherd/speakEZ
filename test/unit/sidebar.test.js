@@ -1,5 +1,5 @@
 import { unit as test } from '../testpup.js'
-import { isAdminPubkey, sanitizeDescription } from '../../worker/auth.js'
+import { isAdminPubkey, sanitizeDescription, canCloseThread } from '../../worker/auth.js'
 
 // — sanitizeDescription —
 
@@ -68,4 +68,28 @@ test('isAdminPubkey: returns false when ADMINS is undefined', t => {
 
 test('isAdminPubkey: returns false when pubkey is empty string', t => {
   t.falsy(isAdminPubkey('', { ADMINS: 'pk-admin' }))
+})
+
+// — canCloseThread —
+
+const THREAD = { id: 't1', name: 'topic', createdBy: 'pk-creator', ts: 1 }
+
+test('canCloseThread: creator can close their own thread', t => {
+  t.ok(canCloseThread('pk-creator', THREAD, {}))
+})
+
+test('canCloseThread: admin can close any thread', t => {
+  t.ok(canCloseThread('pk-admin', THREAD, { ADMINS: 'pk-admin' }))
+})
+
+test('canCloseThread: non-creator non-admin cannot close', t => {
+  t.falsy(canCloseThread('pk-other', THREAD, { ADMINS: 'pk-admin' }))
+})
+
+test('canCloseThread: returns false for null thread', t => {
+  t.falsy(canCloseThread('pk-creator', null, {}))
+})
+
+test('canCloseThread: admin with comma list can close', t => {
+  t.ok(canCloseThread('pk2', THREAD, { ADMINS: 'pk1, pk2, pk3' }))
 })

@@ -2,7 +2,7 @@ import { searchEmoji } from '../../../../../lib/emoji.js'
 import { parseDiceCommand } from '../../../../../lib/dice.js'
 import { state, session, saveRead } from './state.js'
 import { esc, fmtTime, avatarColor, fmtDuration, fmtSecs } from './utils.js'
-import { renderSidebar, sidebarAuth, refreshUnread, dmRooms, showCtx } from './sidebar.js'
+import { renderSidebar, sidebarAuth, refreshUnread, dmRooms, threadRooms, switchChannel, showCtx } from './sidebar.js'
 
 // — Text processing —
 const URL_RE = /https?:\/\/[^\s<>"']+|\/api\/upload\/[^\s<>"']+/g
@@ -171,7 +171,7 @@ export const renderMessage = ({ id, from, text, ts, replyTo: msgReplyTo }) => {
 
   const el = document.createElement('div')
   el.className = `msg-row${isConsecutive ? ' consecutive' : ''}`
-  if (id) el.dataset.id = id
+  if (id) { el.dataset.id = id; el.id = 'msg-' + id }
   const displayName = esc(from.name || from.pubkey.slice(0, 8))
   const initial = (from.name || '?')[0].toUpperCase()
   const color = avatarColor(from.pubkey)
@@ -241,7 +241,7 @@ const prependMessage = (msg) => {
   const isDice = text.includes('⟵') || /[⚀-⚅]/.test(text)
   const el = document.createElement('div')
   el.className = 'msg-row'
-  if (id) el.dataset.id = id
+  if (id) { el.dataset.id = id; el.id = 'msg-' + id }
   const currentMember = state.allMembers.get(from.pubkey)
   const displayName = esc(currentMember?.name || from.name || from.pubkey.slice(0, 8))
   const color = avatarColor(from.pubkey)
@@ -354,6 +354,7 @@ document.addEventListener('touchend', () => { _scrubActive = null })
 
 // — Message actions —
 const SVG_REPLY = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>'
+const SVG_LINK = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>'
 const SVG_EDIT = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>'
 const SVG_DELETE = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>'
 
@@ -436,6 +437,12 @@ const bindMessageActions = (el, id, from, text, ts, isOwn, isDice) => {
   actions.appendChild(mkQuickReact('💯', '100'))
   actions.appendChild(mkQuickReact('☝️', 'this'))
   actions.appendChild(mkBtn('Add reaction', '☺', '', () => showReactInput(id, el)))
+  actions.appendChild(mkBtn('Copy link', SVG_LINK, '', () => {
+    navigator.clipboard.writeText(`${location.origin}${location.pathname}#msg-${id}`).then(() => {
+      const btn = el.querySelector('[title="Copy link"]')
+      if (btn) { btn.style.opacity = '1'; setTimeout(() => { btn.style.opacity = '' }, 1200) }
+    })
+  }))
   actions.appendChild(mkBtn('Reply', SVG_REPLY, '', () => setReply({ id, from, text, ts })))
   if (isOwn) {
     actions.appendChild(mkBtn('Edit', SVG_EDIT, '', () => startEdit(el, id, text)))
@@ -649,14 +656,15 @@ export const connect = (room = state.activeChannelId) => {
   if (!reconnecting) { historyHasMore = false; oldestTs = null; oldestId = null }
   state.onlineMembers.clear()
   typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
-  messagesEl.innerHTML = '<div class="chat-spinner"><img src="/favicon.png" class="chat-spinner-img" alt=""></div>'
+  if (!reconnecting) messagesEl.innerHTML = '<div class="chat-spinner"><img src="/favicon.png" class="chat-spinner-img" alt=""></div>'
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   state.ws = new WebSocket(`${proto}//${location.host}/api/ws?token=${encodeURIComponent(session.token)}&room=${encodeURIComponent(room)}`)
 
   state.ws.addEventListener('open', () => {
     chatInput.disabled = false
     sendBtn.disabled = false
-    if (!isTouchDevice()) chatInput.focus()
+    const focused = document.activeElement
+    if (!isTouchDevice() && (!focused || focused === document.body || focused === chatInput)) chatInput.focus()
     refreshUnread()
     fetch('/api/dm', { headers: sidebarAuth() })
       .then(res => res.ok ? res.json() : null)
@@ -701,18 +709,25 @@ export const connect = (room = state.activeChannelId) => {
         typingUsers.set(pubkey, { name, timer })
         renderTyping()
       } else if (msg.type === 'presence') {
+        pendingLeaves.forEach(t => clearTimeout(t)); pendingLeaves.clear()
         state.onlineMembers.clear()
         for (const m of (msg.members || [])) {
           if (m.pubkey) { state.onlineMembers.set(m.pubkey, m); state.allMembers.set(m.pubkey, m) }
         }
         import('./app.js').then(({ renderOnline }) => renderOnline())
       } else if (msg.type === 'join' && msg.from?.pubkey) {
+        const pending = pendingLeaves.get(msg.from.pubkey)
+        if (pending) { clearTimeout(pending); pendingLeaves.delete(msg.from.pubkey) }
         state.onlineMembers.set(msg.from.pubkey, msg.from)
         state.allMembers.set(msg.from.pubkey, msg.from)
         import('./app.js').then(({ renderOnline }) => renderOnline())
       } else if (msg.type === 'leave' && msg.pubkey) {
-        state.onlineMembers.delete(msg.pubkey)
-        import('./app.js').then(({ renderOnline }) => renderOnline())
+        if (pendingLeaves.has(msg.pubkey)) clearTimeout(pendingLeaves.get(msg.pubkey))
+        pendingLeaves.set(msg.pubkey, setTimeout(() => {
+          pendingLeaves.delete(msg.pubkey)
+          state.onlineMembers.delete(msg.pubkey)
+          import('./app.js').then(({ renderOnline }) => renderOnline())
+        }, 5000))
       } else if (msg.type === 'profile' && msg.pubkey) {
         const updated = { pubkey: msg.pubkey, name: msg.name, avatar: msg.avatar }
         state.allMembers.set(msg.pubkey, updated)
@@ -729,6 +744,21 @@ export const connect = (room = state.activeChannelId) => {
             renderSidebar()
             refreshUnread()
           }).catch(() => {})
+      } else if (msg.type === 'thread_notify') {
+        fetch('/api/threads', { headers: sidebarAuth() })
+          .then(res => res.ok ? res.json() : null)
+          .then(fresh => {
+            if (!fresh) return
+            for (const t of fresh) {
+              if (!threadRooms.find(r => r.id === t.id)) threadRooms.push(t)
+            }
+            renderSidebar()
+          }).catch(() => {})
+      } else if (msg.type === 'thread_deleted') {
+        const idx = threadRooms.findIndex(t => t.id === msg.id)
+        if (idx !== -1) threadRooms.splice(idx, 1)
+        if (state.activeChannelId === msg.id) switchChannel('general')
+        renderSidebar()
       } else if (msg.type === 'reload_sidebar') {
         import('./sidebar.js').then(({ loadSidebar }) => loadSidebar())
       } else if (msg.type === 'history_start') {
@@ -738,6 +768,15 @@ export const connect = (room = state.activeChannelId) => {
           messagesEl.innerHTML = '<div class="empty">nothing here yet.<br>say something.</div>'
         }
         renderLoadMore()
+        const hash = location.hash
+        if (hash.startsWith('#msg-')) {
+          const target = document.getElementById(hash.slice(1))
+          if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            target.style.outline = '1px solid var(--accent)'
+            setTimeout(() => { target.style.outline = '' }, 1500)
+          }
+        }
       } else if (msg.type === 'history_chunk') {
         historyHasMore = !!msg.hasMore
         for (const envelope of (msg.messages || [])) {
@@ -756,7 +795,7 @@ export const connect = (room = state.activeChannelId) => {
     state.onlineMembers.clear()
     import('./app.js').then(({ renderOnline }) => renderOnline())
     typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
-    reconnectTimer = setTimeout(() => connect(state.activeChannelId), 3000)
+    reconnectTimer = setTimeout(() => connect(state.activeChannelId), 1000)
   })
 
   state.ws.addEventListener('error', () => { if (state.ws.readyState !== WebSocket.CLOSED) state.ws.close() })
@@ -782,6 +821,7 @@ document.addEventListener('focusin', e => {
 // — Typing indicator —
 const typingEl = document.getElementById('typing-indicator')
 const typingUsers = new Map()
+const pendingLeaves = new Map() // pubkey → timer; grace period before marking offline
 
 const renderTyping = () => {
   const names = [...typingUsers.values()].map(u => u.name || 'someone')

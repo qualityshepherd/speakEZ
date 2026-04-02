@@ -8,7 +8,7 @@ export { ChatRoom }
 export const emojiKeyToName = (key) => key.replace(/\.[^.]+$/, '')
 export const emojiKeyToUrl = (key) => `/emoji/${key}`
 
-const AUTH_PATHS = ['/api/invite/', '/api/register', '/api/challenge', '/api/login', '/api/kick', '/api/invite', '/api/me', '/api/members', '/api/sidebar', '/api/upload', '/api/boot', '/api/turn', '/api/dm', '/api/admin/', '/api/push/']
+const AUTH_PATHS = ['/api/invite/', '/api/register', '/api/challenge', '/api/login', '/api/kick', '/api/invite', '/api/me', '/api/members', '/api/sidebar', '/api/upload', '/api/boot', '/api/turn', '/api/dm', '/api/threads', '/api/admin/', '/api/push/']
 const OG_PATH = '/api/og'
 const PAGES = ['/admin', '/login', '/me', '/invite']
 

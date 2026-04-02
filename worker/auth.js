@@ -64,6 +64,9 @@ export const incrementAttempt = (record, now, windowMs) => {
 export const isAdminPubkey = (pubkey, env) =>
   !!(env.ADMINS && env.ADMINS.split(',').map(s => s.trim()).filter(Boolean).includes(pubkey))
 
+export const canCloseThread = (pubkey, thread, env) =>
+  !!(thread && (thread.createdBy === pubkey || isAdminPubkey(pubkey, env)))
+
 export const sanitizeDescription = (desc) => {
   if (desc == null) return ''
   return String(desc).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
@@ -504,17 +507,18 @@ export const handleAuth = async (req, env, domain) => {
     const roomIds = (await env.KV.get(`dm-member:${found.pubkey}`, { type: 'json' })) || []
 
     // Surface rooms with pending notifications, re-adding user as member so WS auth passes
-    const notifyList = await env.KV.list({ prefix: `dm-notify:${found.pubkey}:` })
-    for (const key of (notifyList.keys || [])) {
-      const notifyRoomId = key.name.split(':').slice(2).join(':')
-      if (!roomIds.includes(notifyRoomId)) roomIds.push(notifyRoomId)
-      await env.KV.delete(key.name)
-      const notifyRoom = await env.KV.get(`dm:${notifyRoomId}`, { type: 'json' })
-      if (notifyRoom && !notifyRoom.members.includes(found.pubkey)) {
-        notifyRoom.members.push(found.pubkey)
-        await env.KV.put(`dm:${notifyRoomId}`, JSON.stringify(notifyRoom))
-        await addDmToMember(found.pubkey, notifyRoomId, env.KV)
+    const pending = (await env.KV.get(`dm-pending:${found.pubkey}`, { type: 'json' })) || []
+    if (pending.length > 0) {
+      for (const notifyRoomId of pending) {
+        if (!roomIds.includes(notifyRoomId)) roomIds.push(notifyRoomId)
+        const notifyRoom = await env.KV.get(`dm:${notifyRoomId}`, { type: 'json' })
+        if (notifyRoom && !notifyRoom.members.includes(found.pubkey)) {
+          notifyRoom.members.push(found.pubkey)
+          await env.KV.put(`dm:${notifyRoomId}`, JSON.stringify(notifyRoom))
+          await addDmToMember(found.pubkey, notifyRoomId, env.KV)
+        }
       }
+      await env.KV.delete(`dm-pending:${found.pubkey}`)
     }
 
     const rooms = (await Promise.all(roomIds.map(id => env.KV.get(`dm:${id}`, { type: 'json' })))).filter(Boolean)
@@ -579,7 +583,11 @@ export const handleAuth = async (req, env, domain) => {
     const ttl = 7 * 24 * 60 * 60
     for (const pubkey of room.members) {
       if (pubkey !== found.pubkey) {
-        await env.KV.put(`dm-notify:${pubkey}:${roomId}`, '1', { expirationTtl: ttl })
+        const existing = (await env.KV.get(`dm-pending:${pubkey}`, { type: 'json' })) || []
+        if (!existing.includes(roomId)) {
+          existing.push(roomId)
+          await env.KV.put(`dm-pending:${pubkey}`, JSON.stringify(existing))
+        }
       }
     }
     await broadcastToRooms(JSON.stringify({ type: 'dm_notify' }), env)
@@ -640,6 +648,57 @@ export const handleAuth = async (req, env, domain) => {
     return json({ ok: true })
   }
 
+  // — Threads —
+  if (method === 'GET' && path === '/api/threads') {
+    const found = await requireSession()
+    if (!found) return json({ error: 'unauthorized' }, 401)
+    return json(await env.KV.get('threads', { type: 'json' }) || [])
+  }
+
+  if (method === 'POST' && path === '/api/threads') {
+    const found = await requireSession()
+    if (!found) return json({ error: 'unauthorized' }, 401)
+    let _t; try { _t = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { name } = _t
+    if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
+    const threads = await env.KV.get('threads', { type: 'json' }) || []
+    const thread = { id: crypto.randomUUID(), name: name.trim().slice(0, 64), createdBy: found.pubkey, ts: Date.now() }
+    threads.push(thread)
+    await env.KV.put('threads', JSON.stringify(threads))
+    await broadcastToRooms(JSON.stringify({ type: 'thread_notify' }), env)
+    return json(thread)
+  }
+
+  const threadPatchMatch = path.match(/^\/api\/threads\/([^/]+)$/)
+  if (method === 'PATCH' && threadPatchMatch) {
+    const found = await requireSession()
+    if (!found) return json({ error: 'unauthorized' }, 401)
+    const id = threadPatchMatch[1]
+    const threads = await env.KV.get('threads', { type: 'json' }) || []
+    const thread = threads.find(t => t.id === id)
+    if (!thread) return json({ error: 'not found' }, 404)
+    let _tp; try { _tp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
+    const { description } = _tp
+    if (description === undefined) return json({ error: 'nothing to update' }, 400)
+    thread.description = sanitizeDescription(description)
+    await env.KV.put('threads', JSON.stringify(threads))
+    return json(thread)
+  }
+
+  const threadDeleteMatch = path.match(/^\/api\/threads\/([^/]+)$/)
+  if (method === 'DELETE' && threadDeleteMatch) {
+    const found = await requireSession()
+    if (!found) return json({ error: 'unauthorized' }, 401)
+    const id = threadDeleteMatch[1]
+    const threads = await env.KV.get('threads', { type: 'json' }) || []
+    const thread = threads.find(t => t.id === id)
+    if (!thread) return json({ error: 'not found' }, 404)
+    if (!canCloseThread(found.pubkey, thread, env)) return json({ error: 'forbidden' }, 403)
+    await env.KV.put('threads', JSON.stringify(threads.filter(t => t.id !== id)))
+    await broadcastToRooms(JSON.stringify({ type: 'thread_deleted', id }), env)
+    return json({ ok: true })
+  }
+
   // — Push notifications —
   if (method === 'GET' && path === '/api/push/key') {
     if (!env.VAPID_PUBLIC_KEY) return json({ error: 'push not configured' }, 503)
@@ -678,7 +737,7 @@ export const handleAuth = async (req, env, domain) => {
       }
     }
     // Wipe DM KV keys
-    const dmPrefixes = ['dm:', 'dm-member:', 'dm-notify:', 'dm-pair:']
+    const dmPrefixes = ['dm:', 'dm-member:', 'dm-notify:', 'dm-pending:', 'dm-pair:']
     let dmDeleted = 0
     for (const prefix of dmPrefixes) {
       let cursor

@@ -417,9 +417,12 @@ export class ChatRoom {
     if (!allMembers?.length) return
     const toInvite = getInvitableMentions(text, allMembers, dmRoom.members, senderPubkey)
     if (!toInvite.length) return
-    const ttl = 7 * 24 * 60 * 60
     for (const pubkey of toInvite) {
-      await this.env.KV.put(`dm-notify:${pubkey}:${roomId}`, '1', { expirationTtl: ttl })
+      const existing = (await this.env.KV.get(`dm-pending:${pubkey}`, { type: 'json' })) || []
+      if (!existing.includes(roomId)) {
+        existing.push(roomId)
+        await this.env.KV.put(`dm-pending:${pubkey}`, JSON.stringify(existing))
+      }
     }
     // Broadcast after KV write so invited users' GET /api/dm sees the key
     if (!this.env.CHAT_ROOM) return
