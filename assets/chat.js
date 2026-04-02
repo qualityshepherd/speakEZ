@@ -654,7 +654,7 @@ export const connect = (room = state.activeChannelId) => {
   lastReadTs = state.reads[room] || 0
   unreadDividerShown = false
   if (!reconnecting) { historyHasMore = false; oldestTs = null; oldestId = null }
-  state.onlineMembers.clear()
+  if (!reconnecting) state.onlineMembers.clear()
   typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
   if (!reconnecting) messagesEl.innerHTML = '<div class="chat-spinner"><img src="/favicon.png" class="chat-spinner-img" alt=""></div>'
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -679,7 +679,7 @@ export const connect = (room = state.activeChannelId) => {
     const ping = setInterval(() => {
       if (state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' }))
       else clearInterval(ping)
-    }, 20000)
+    }, 10000)
     state.ws.addEventListener('close', () => clearInterval(ping), { once: true })
   })
 
@@ -784,7 +784,14 @@ export const connect = (room = state.activeChannelId) => {
         }
         for (const r of (msg.reactions || [])) renderReactions(r.msgId, r.reactions)
         renderLoadMore()
-        if (!historyHasMore) messagesEl.scrollTop = messagesEl.scrollHeight
+        if (!historyHasMore) {
+          messagesEl.scrollTop = messagesEl.scrollHeight
+          const imgs = [...messagesEl.querySelectorAll('img')]
+          if (imgs.length) {
+            Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r })))
+              .then(() => { messagesEl.scrollTop = messagesEl.scrollHeight })
+          }
+        }
       }
     } catch {}
   })
