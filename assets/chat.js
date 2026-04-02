@@ -4,7 +4,6 @@ import { state, session, saveRead } from './state.js'
 import { esc, fmtTime, avatarColor, fmtDuration, fmtSecs } from './utils.js'
 import { renderSidebar, sidebarAuth, refreshUnread, dmRooms, threadRooms, switchChannel, showCtx } from './sidebar.js'
 
-// — Text processing —
 const URL_RE = /https?:\/\/[^\s<>"']+|\/api\/upload\/[^\s<>"']+/g
 const IMG_EXT_RE = /\.(jpe?g|png|gif|webp|svg)(\?[^\s]*)?$/i
 const AUDIO_EXT_RE = /\.(webm|ogg|m4a|mp3|wav)(\?[^\s]*)?$/i
@@ -93,25 +92,68 @@ const postprocess = (html) => {
 const renderText = (text) =>
   customEmojiHtml(dieFaceHtml(mentionHtml(postprocess(marked.parse(preprocess(text), { async: false })))))
 
-// — OG previews —
+const giphyGifUrl = (url) => {
+  const m = url.match(/^https?:\/\/(?:www\.)?giphy\.com\/gifs\/([^/?#]+)/)
+  if (!m) return null
+  return `https://media.giphy.com/media/${m[1].split('-').pop()}/giphy.gif`
+}
+
+const isTenorUrl = (url) => /^https?:\/\/(?:www\.)?tenor\.com\/view\//.test(url)
+
+const _scrollToBottom = () => {
+  requestAnimationFrame(() => {
+    messagesEl.scrollTop = messagesEl.scrollHeight
+  })
+}
+
+const _observeImgForScroll = (img) => {
+  const trigger = () => _scrollToBottom()
+  if (img.complete && img.naturalHeight > 0) {
+    requestAnimationFrame(trigger)
+  } else {
+    img.addEventListener('load', trigger, { once: true })
+    img.addEventListener('error', trigger, { once: true })
+  }
+}
+
+const insertGifEmbed = (gifUrl, msgBody) => {
+  const img = document.createElement('img')
+  img.className = 'msg-img giphy-embed'
+  img.src = gifUrl
+  img.alt = ''
+  img.setAttribute('data-lightbox', gifUrl)
+  const reactRow = msgBody.querySelector('.msg-reactions')
+  reactRow ? msgBody.insertBefore(img, reactRow) : msgBody.appendChild(img)
+  _observeImgForScroll(img)
+}
+
 const ogCache = new Map()
 const fetchOGPreviews = async (msgEl, text) => {
   const urls = [...text.matchAll(/https?:\/\/[^\s<>"']+/g)]
     .map(m => m[0])
     .filter(u => !isImageUrl(u))
   if (!urls.length) return
-  const token = session?.token
-  if (!token) return
   const msgBody = msgEl.querySelector('.msg-body')
   if (!msgBody) return
   for (const url of urls.slice(0, 1)) {
     try {
+      const gifUrl = giphyGifUrl(url)
+      if (gifUrl) {
+        insertGifEmbed(gifUrl, msgBody)
+        continue
+      }
+      const token = session?.token
+      if (!token) continue
       let og = ogCache.get(url)
       if (!og) {
         const res = await fetch(`/api/og?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${token}` } })
         if (!res.ok) continue
         og = await res.json()
         ogCache.set(url, og)
+      }
+      if (isTenorUrl(url) && og.image) {
+        insertGifEmbed(og.image, msgBody)
+        continue
       }
       if (!og.title && !og.image) continue
       const card = document.createElement('a')
@@ -127,11 +169,12 @@ const fetchOGPreviews = async (msgEl, text) => {
         '</div>'
       const reactRow = msgBody.querySelector('.msg-reactions')
       reactRow ? msgBody.insertBefore(card, reactRow) : msgBody.appendChild(card)
+      const thumb = card.querySelector('img.og-thumb')
+      if (thumb) _observeImgForScroll(thumb)
     } catch {}
   }
 }
 
-// — Chat state —
 export const messagesEl = document.getElementById('messages')
 const chatInput = document.getElementById('chat-input')
 const sendBtn = document.getElementById('send')
@@ -145,7 +188,6 @@ let oldestTs = null
 let oldestId = null
 let replyTo = null
 
-// — Message rendering —
 export const renderMessage = ({ id, from, text, ts, replyTo: msgReplyTo }) => {
   if (id && document.querySelector(`[data-id="${CSS.escape(id)}"]`)) {
     if (!oldestTs || ts < oldestTs || (ts === oldestTs && id < oldestId)) { oldestTs = ts; oldestId = id }
@@ -210,7 +252,7 @@ export const renderMessage = ({ id, from, text, ts, replyTo: msgReplyTo }) => {
 
   if (id) bindMessageActions(el, id, from, text, ts, isOwn, isDice)
   messagesEl.appendChild(el)
-  messagesEl.scrollTop = messagesEl.scrollHeight
+  _scrollToBottom()
   if (Date.now() - ts < 10000) notifyIfNeeded(from, text, msgReplyTo)
   fetchOGPreviews(el, text)
 }
@@ -269,7 +311,6 @@ const prependMessage = (msg) => {
   fetchOGPreviews(el, text)
 }
 
-// — Audio player —
 const SVG_PLAY = '<svg viewBox="0 0 10 10" width="11" height="11" fill="currentColor"><polygon points="1,0.5 9.5,5 1,9.5"/></svg>'
 const SVG_PAUSE = '<svg viewBox="0 0 10 10" width="11" height="11" fill="currentColor"><rect x="1" y="0.5" width="3.2" height="9"/><rect x="5.8" y="0.5" width="3.2" height="9"/></svg>'
 const audioPlayers = new WeakMap()
@@ -352,7 +393,6 @@ document.addEventListener('touchmove', e => {
 }, { passive: true })
 document.addEventListener('touchend', () => { _scrubActive = null })
 
-// — Message actions —
 const SVG_REPLY = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>'
 const SVG_LINK = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>'
 const SVG_EDIT = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>'
@@ -529,7 +569,6 @@ export const renderReactions = (msgId, reactions) => {
   pillsEl.appendChild(makeReactAddBtn(msgId, msgEl))
 }
 
-// — Emoji picker —
 const pickerEl = document.getElementById('emoji-picker')
 let pickerResults = []; let pickerIdx = 0; let pickerMode = null; let pickerMsgId = null; let pickerColonPos = -1
 let reactInputEl = null
@@ -622,7 +661,6 @@ const showReactInput = (msgId, msgEl) => {
   }, 150))
 }
 
-// — Replies —
 const replyBar = document.getElementById('reply-bar')
 const replyBarText = document.getElementById('reply-bar-text')
 
@@ -640,7 +678,6 @@ export const clearReply = () => {
 
 document.getElementById('reply-cancel').addEventListener('click', clearReply)
 
-// — WebSocket —
 const isTouchDevice = () => window.matchMedia('(hover: none) and (pointer: coarse)').matches
 
 export const connect = (room = state.activeChannelId) => {
@@ -777,6 +814,7 @@ export const connect = (room = state.activeChannelId) => {
             setTimeout(() => { target.style.outline = '' }, 1500)
           }
         }
+        _scrollToBottom()
       } else if (msg.type === 'history_chunk') {
         historyHasMore = !!msg.hasMore
         for (const envelope of (msg.messages || [])) {
@@ -785,11 +823,16 @@ export const connect = (room = state.activeChannelId) => {
         for (const r of (msg.reactions || [])) renderReactions(r.msgId, r.reactions)
         renderLoadMore()
         if (!historyHasMore) {
-          messagesEl.scrollTop = messagesEl.scrollHeight
+          _scrollToBottom()
           const imgs = [...messagesEl.querySelectorAll('img')]
           if (imgs.length) {
-            Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r })))
-              .then(() => { messagesEl.scrollTop = messagesEl.scrollHeight })
+            Promise.all(imgs.map(img => img.complete
+              ? Promise.resolve()
+              : new Promise(resolve => {
+                img.onload = resolve
+                img.onerror = resolve
+              })))
+              .then(() => { _scrollToBottom() })
           }
         }
       }
@@ -810,7 +853,6 @@ export const connect = (room = state.activeChannelId) => {
 
 let reconnectTimer = null
 
-// Reconnect immediately on wake-from-sleep or network restore
 const reconnectIfDead = () => {
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
     clearTimeout(reconnectTimer)
@@ -825,10 +867,9 @@ document.addEventListener('focusin', e => {
   }
 })
 
-// — Typing indicator —
 const typingEl = document.getElementById('typing-indicator')
 const typingUsers = new Map()
-const pendingLeaves = new Map() // pubkey → timer; grace period before marking offline
+const pendingLeaves = new Map()
 
 const renderTyping = () => {
   const names = [...typingUsers.values()].map(u => u.name || 'someone')
@@ -869,7 +910,6 @@ const resizeInput = () => {
   chatInput.style.height = Math.min(chatInput.scrollHeight, 192) + 'px'
 }
 
-// — @mention picker —
 const mentionPickerEl = document.getElementById('mention-picker')
 let mentionStart = -1
 let mentionIdx = 0
@@ -973,7 +1013,6 @@ chatInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
 })
 
-// — Image upload —
 const uploadBtn = document.getElementById('upload-btn')
 const fileInput = document.getElementById('file-input')
 const chatArea = document.getElementById('chat-area')
@@ -1056,7 +1095,6 @@ chatArea.addEventListener('drop', e => {
   if (file) uploadAndInsert(file)
 })
 
-// — Image lightbox —
 const lightbox = document.getElementById('img-lightbox')
 const lightboxImg = document.getElementById('img-lightbox-img')
 document.addEventListener('click', e => {
@@ -1066,7 +1104,6 @@ document.addEventListener('click', e => {
 })
 document.addEventListener('keydown', e => { if (e.key === 'Escape') lightbox.classList.remove('open') })
 
-// — Voice memo —
 const recordBtn = document.getElementById('record-btn')
 const recordTimer = document.getElementById('record-timer')
 let mediaRec = null; let recChunks = []; let recStart = null; let recTimerInterval = null
@@ -1158,13 +1195,11 @@ recordBtn.addEventListener('click', async () => {
   mediaRec.start()
 })
 
-// mirror disabled state onto upload + record buttons
 new MutationObserver(() => {
   uploadBtn.disabled = chatInput.disabled
   recordBtn.disabled = chatInput.disabled
 }).observe(chatInput, { attributes: true, attributeFilter: ['disabled'] })
 
-// — Search —
 const searchBar = document.getElementById('search-bar')
 const searchInput = document.getElementById('search-input')
 const searchBtn = document.getElementById('search-btn')
@@ -1227,7 +1262,6 @@ searchInput.addEventListener('input', () => {
 })
 searchInput.addEventListener('keydown', e => { if (e.key === 'Escape') closeSearch() })
 
-// — Notification sound + title —
 const playMentionSound = () => {
   try {
     const ctx = new AudioContext()

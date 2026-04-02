@@ -1,5 +1,12 @@
 const INTERNAL_HOST = /^(localhost$|127\.|0\.0\.0\.0|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|\[)/
 
+export const giphyGifUrl = (url) => {
+  const m = url.match(/^https?:\/\/(?:www\.)?giphy\.com\/gifs\/([^/?#]+)/)
+  if (!m) return null
+  const id = m[1].split('-').pop()
+  return `https://media.giphy.com/media/${id}/giphy.gif`
+}
+
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
 
@@ -57,6 +64,8 @@ const fetchPageOG = async (target, fetchFn) => {
 }
 
 const YOUTUBE_HOST = /^(www\.|m\.)?youtube\.com$|^youtu\.be$/
+
+export const isTenorUrl = (url) => /^https?:\/\/(?:www\.)?tenor\.com\/view\//.test(url)
 
 const fetchYouTubeOG = async (target, fetchFn) => {
   const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(target)}&format=json`

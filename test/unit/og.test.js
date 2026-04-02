@@ -1,5 +1,53 @@
 import { unit as test } from '../testpup.js'
-import { handleOG } from '../../worker/og.js'
+import { handleOG, giphyGifUrl, isTenorUrl } from '../../worker/og.js'
+
+// giphyGifUrl
+test('giphyGifUrl: plain ID (no slug words)', t => {
+  t.is(giphyGifUrl('https://giphy.com/gifs/67T3QzN95PlGfG7JrZ'), 'https://media.giphy.com/media/67T3QzN95PlGfG7JrZ/giphy.gif')
+})
+
+test('giphyGifUrl: slug with description words', t => {
+  t.is(giphyGifUrl('https://giphy.com/gifs/cats-playing-AbCdEfGhIjKl'), 'https://media.giphy.com/media/AbCdEfGhIjKl/giphy.gif')
+})
+
+test('giphyGifUrl: www subdomain', t => {
+  t.is(giphyGifUrl('https://www.giphy.com/gifs/AbCdEfGhIjKl'), 'https://media.giphy.com/media/AbCdEfGhIjKl/giphy.gif')
+})
+
+test('giphyGifUrl: non-giphy URL returns null', t => {
+  t.is(giphyGifUrl('https://youtube.com/watch?v=abc'), null)
+})
+
+test('giphyGifUrl: random URL returns null', t => {
+  t.is(giphyGifUrl('https://example.com'), null)
+})
+
+// isTenorUrl
+test('isTenorUrl: basic tenor view URL', t => {
+  t.ok(isTenorUrl('https://tenor.com/view/funny-cat-12345678'))
+})
+
+test('isTenorUrl: www subdomain', t => {
+  t.ok(isTenorUrl('https://www.tenor.com/view/whatever-987654321'))
+})
+
+test('isTenorUrl: non-tenor URL returns false', t => {
+  t.falsy(isTenorUrl('https://giphy.com/gifs/abc'))
+})
+
+test('isTenorUrl: random URL returns false', t => {
+  t.falsy(isTenorUrl('https://example.com'))
+})
+
+// Tenor via handleOG — scrapes the page (og:image is animated GIF), no oEmbed
+test('GET /api/og: Tenor fetches page directly, not oEmbed', async t => {
+  let calledUrl = ''
+  const mockFetch = async (url) => { calledUrl = url; return new Response('', { status: 200 }) }
+  const req = new Request('http://x/api/og?url=https://tenor.com/view/funny-cat-12345678')
+  const res = await handleOG(req, {}, mockFetch)
+  t.is(calledUrl, 'https://tenor.com/view/funny-cat-12345678', 'fetched page, not oEmbed')
+  t.is(res.status, 200)
+})
 
 // URL validation — rejects before any fetch or HTMLRewriter
 test('GET /api/og: IPv6 loopback is blocked', async t => {
