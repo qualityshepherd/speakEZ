@@ -4,6 +4,8 @@ document.documentElement.classList.remove('no-session')
 
 export const state = {
   isAdmin: false,
+  isOwner: false,
+  kvAdmins: [],
   ws: null,
   activeChannelId: 'general',
   activeVoiceChannel: null,

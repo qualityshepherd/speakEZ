@@ -1,32 +1,32 @@
 import { unit as test } from '../testpup.js'
 import { canModify, toggleEmoji, sanitizeFtsQuery, parseMentions, getInvitableMentions } from '../../worker/room.js'
 
-test('canModify: owner can modify their own message', t => {
-  t.ok(canModify('pk1', 'pk1', ''))
+test('canModify: sender can modify their own message', t => {
+  t.ok(canModify('pk1', 'pk1'))
 })
 
-test('canModify: non-owner cannot modify', t => {
+test('canModify: stranger cannot modify', t => {
+  t.falsy(canModify('pk2', 'pk1'))
+})
+
+test('canModify: owner can modify anyone\'s message', t => {
+  t.ok(canModify('pk-owner', 'pk1', 'pk-owner'))
+})
+
+test('canModify: owner check is exact match', t => {
+  t.falsy(canModify('pk-other', 'pk1', 'pk-owner'))
+})
+
+test('canModify: kv admin can modify anyone\'s message', t => {
+  t.ok(canModify('pk-admin', 'pk1', '', ['pk-admin']))
+})
+
+test('canModify: kv admin not in list cannot modify', t => {
+  t.falsy(canModify('pk-other', 'pk1', '', ['pk-admin']))
+})
+
+test('canModify: no owner no kvAdmins', t => {
   t.falsy(canModify('pk2', 'pk1', ''))
-})
-
-test('canModify: admin can modify anyone\'s message', t => {
-  t.ok(canModify('admin', 'pk1', 'admin'))
-})
-
-test('canModify: admin cannot modify if not in list', t => {
-  t.falsy(canModify('pk2', 'pk1', 'admin'))
-})
-
-test('canModify: works with comma-separated admin list', t => {
-  t.ok(canModify('admin2', 'pk1', 'admin1, admin2, admin3'))
-})
-
-test('canModify: empty admins string', t => {
-  t.falsy(canModify('pk2', 'pk1', ''))
-})
-
-test('canModify: undefined admins', t => {
-  t.falsy(canModify('pk2', 'pk1', undefined))
 })
 
 test('toggleEmoji: adds reaction', t => {

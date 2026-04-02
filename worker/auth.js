@@ -61,15 +61,34 @@ export const incrementAttempt = (record, now, windowMs) => {
   return { count: record.count + 1, resetAt: record.resetAt }
 }
 
-export const isAdminPubkey = (pubkey, env) =>
-  !!(env.ADMINS && env.ADMINS.split(',').map(s => s.trim()).filter(Boolean).includes(pubkey))
+export const isOwnerPubkey = (pubkey, env) =>
+  !!(pubkey && env.OWNER && pubkey === env.OWNER.trim())
 
-export const canCloseThread = (pubkey, thread, env) =>
-  !!(thread && (thread.createdBy === pubkey || isAdminPubkey(pubkey, env)))
+export const isKvAdmin = (pubkey, kvAdmins) =>
+  !!(pubkey && Array.isArray(kvAdmins) && kvAdmins.includes(pubkey))
+
+export const isAdminOrKvAdmin = async (pubkey, env, kv) => {
+  if (isOwnerPubkey(pubkey, env)) return true
+  const kvAdmins = await kv.get('admins', { type: 'json' })
+  return isKvAdmin(pubkey, kvAdmins)
+}
+
+export const canCloseThread = (pubkey, thread, env, kvAdmins) =>
+  !!(thread && (thread.createdBy === pubkey || isOwnerPubkey(pubkey, env) || isKvAdmin(pubkey, kvAdmins)))
 
 export const sanitizeDescription = (desc) => {
   if (desc == null) return ''
-  return String(desc).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+  // eslint-disable-next-line no-control-regex
+  return String(desc).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+}
+
+export const sanitizeNote = (note) => {
+  if (note == null) return ''
+  return String(note)
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '') // eslint-disable-line no-control-regex
+    .replace(/\r\n?/g, '\n')
+    .trim()
+    .slice(0, 300)
 }
 
 export const memberByToken = async (token, kv) => {
@@ -107,10 +126,17 @@ const getMembersIndex = async (kv) => {
   return members ?? await buildMembersIndex(kv)
 }
 
-const updateMembersIndex = async (pubkey, { name, avatar }, kv) => {
+const updateMembersIndex = async (pubkey, { name, avatar, joinedAt, invitedBy }, kv) => {
   const members = await getMembersIndex(kv)
   const idx = members.findIndex(m => m.pubkey === pubkey)
-  const entry = { pubkey, name: name || null, avatar: avatar || null }
+  const existing = idx !== -1 ? members[idx] : {}
+  const entry = {
+    pubkey,
+    name: name || null,
+    avatar: avatar || null,
+    joinedAt: joinedAt || existing.joinedAt || null,
+    invitedBy: invitedBy || existing.invitedBy || null
+  }
   if (idx !== -1) members[idx] = entry
   else members.push(entry)
   await kv.put('members', JSON.stringify(members))
@@ -219,14 +245,10 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'GET' && path === '/api/invite') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    const list = await env.KV.list({ prefix: 'invite:', metadata: true })
+    const list = await env.KV.list({ prefix: 'invite:' })
     const invites = []
     for (const key of (list.keys || [])) {
-      const meta = key.metadata
-      // Fall back to full GET for older invites written without metadata
-      const invite = meta?.code
-        ? { code: meta.code, expires: meta.expires, used: meta.used }
-        : await env.KV.get(key.name, { type: 'json' })
+      const invite = await env.KV.get(key.name, { type: 'json' })
       if (!invite || !isValidToken(invite.code, domain)) continue
       const status = invite.used ? 'used' : invite.expires <= Date.now() ? 'expired' : 'fresh'
       invites.push({ ...invite, status })
@@ -247,12 +269,16 @@ export const handleAuth = async (req, env, domain) => {
   }
 
   if (method === 'POST' && path === '/api/invite') {
-    const memberFound = await requireSession()
-    if (!memberFound && !adminAuthorized(req, env)) return json({ error: 'unauthorized' }, 401)
-    const invite = makeInvite(domain)
-    await env.KV.put(`invite:${invite.code}`, JSON.stringify(invite), {
-      metadata: { code: invite.code, expires: invite.expires, used: false }
-    })
+    const found = await requireSession()
+    if (!found || !isOwnerPubkey(found.pubkey, env)) return json({ error: 'unauthorized' }, 401)
+    let _inv = {}; try { _inv = await req.json() } catch {}
+    const note = sanitizeNote(_inv.note)
+    const invite = {
+      ...makeInvite(domain),
+      createdBy: found.pubkey,
+      ...(note ? { note } : {})
+    }
+    await env.KV.put(`invite:${invite.code}`, JSON.stringify(invite))
     return json(invite)
   }
 
@@ -265,10 +291,12 @@ export const handleAuth = async (req, env, domain) => {
     const existing = await env.KV.get(pubkey)
     if (existing) return json({ error: 'already registered' }, 409)
     const session = makeSession()
-    await env.KV.put(pubkey, JSON.stringify({ createdAt: Date.now(), name: name || null, session }))
-    await env.KV.put(`invite:${invite.code}`, JSON.stringify({ ...invite, used: true }))
+    const joinedAt = Date.now()
+    const invitedBy = invite.createdBy || null
+    await env.KV.put(pubkey, JSON.stringify({ createdAt: joinedAt, name: name || null, session }))
+    await env.KV.put(`invite:${invite.code}`, JSON.stringify({ ...invite, used: true, usedBy: pubkey }))
     await writeSessionIndex(session.token, pubkey, session.expires, env.KV)
-    await updateMembersIndex(pubkey, { name: name || null, avatar: null }, env.KV)
+    await updateMembersIndex(pubkey, { name: name || null, avatar: null, joinedAt, invitedBy }, env.KV)
     return json({ token: session.token, expires: session.expires })
   }
 
@@ -317,7 +345,12 @@ export const handleAuth = async (req, env, domain) => {
     const found = await memberByToken(token, env.KV)
     if (!found) return json({ error: 'unauthorized' }, 401)
     if (method === 'GET') {
-      return json({ pubkey: found.pubkey, name: found.member.name, avatar: found.member.avatar, isAdmin: isAdminPubkey(found.pubkey, env) })
+      const isOwner = isOwnerPubkey(found.pubkey, env)
+      const kvAdmins = (await env.KV.get('admins', { type: 'json' })) || []
+      const isAdmin = isOwner || isKvAdmin(found.pubkey, kvAdmins)
+      const resp = { pubkey: found.pubkey, name: found.member.name, avatar: found.member.avatar, isAdmin }
+      if (isOwner) resp.kvAdmins = kvAdmins
+      return json(resp)
     }
     if (method === 'POST') {
       let _me; try { _me = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
@@ -347,7 +380,7 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'POST' && path === '/api/sidebar/category') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     let _sc; try { _sc = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const { name } = _sc
     if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
@@ -363,7 +396,7 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'POST' && path === '/api/sidebar/channel') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     let _sch; try { _sch = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const { name, type, category } = _sch
     if (!name || typeof name !== 'string') return json({ error: 'invalid name' }, 400)
@@ -381,7 +414,7 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'PATCH' && categoryPatchMatch) {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     const id = categoryPatchMatch[1]
     let _cp; try { _cp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const { name } = _cp
@@ -399,7 +432,7 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'PATCH' && channelPatchMatch) {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     const id = channelPatchMatch[1]
     let _chp; try { _chp = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const { name, description } = _chp
@@ -419,7 +452,7 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'DELETE' && categoryDeleteMatch) {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     const id = categoryDeleteMatch[1]
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
     sidebar.categories = sidebar.categories.filter(c => c.id !== id)
@@ -434,7 +467,7 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'DELETE' && channelDeleteMatch) {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     const id = channelDeleteMatch[1]
     if (id === 'general') return json({ error: 'cannot delete general' }, 400)
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { ...DEFAULT_SIDEBAR }
@@ -447,7 +480,7 @@ export const handleAuth = async (req, env, domain) => {
   const kickMatch = path.match(/^\/api\/kick\/(.+)$/)
   if (method === 'DELETE' && kickMatch) {
     const found = await requireSession()
-    const sessionAdmin = found && isAdminPubkey(found.pubkey, env)
+    const sessionAdmin = found && await isAdminOrKvAdmin(found.pubkey, env, env.KV)
     if (!sessionAdmin && !adminAuthorized(req, env)) return json({ error: 'unauthorized' }, 401)
     const pubkey = kickMatch[1]
     if (found && pubkey === found.pubkey) return json({ error: 'cannot kick yourself' }, 400)
@@ -461,24 +494,30 @@ export const handleAuth = async (req, env, domain) => {
   if (method === 'GET' && path === '/api/boot') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    const [members, config] = await Promise.all([
+    const [members, config, kvAdmins] = await Promise.all([
       getMembersIndex(env.KV),
-      env.KV.get('config', { type: 'json' })
+      env.KV.get('config', { type: 'json' }),
+      env.KV.get('admins', { type: 'json' })
     ])
-    return json({
+    const isOwner = isOwnerPubkey(found.pubkey, env)
+    const isAdmin = isOwner || isKvAdmin(found.pubkey, kvAdmins || [])
+    const resp = {
       pubkey: found.pubkey,
       name: found.member.name,
       avatar: found.member.avatar,
-      isAdmin: isAdminPubkey(found.pubkey, env),
+      isAdmin,
+      isOwner,
       workspaceName: config?.workspaceName || null,
       members
-    })
+    }
+    if (isOwner) resp.kvAdmins = kvAdmins || []
+    return json(resp)
   }
 
   if (method === 'PATCH' && path === '/api/boot') {
     const found = await requireSession()
     if (!found) return json({ error: 'unauthorized' }, 401)
-    if (!isAdminPubkey(found.pubkey, env)) return json({ error: 'forbidden' }, 403)
+    if (!await isAdminOrKvAdmin(found.pubkey, env, env.KV)) return json({ error: 'forbidden' }, 403)
     let body; try { body = await req.json() } catch { return json({ error: 'invalid json' }, 400) }
     const workspaceName = (body.workspaceName || '').trim().slice(0, 64)
     if (!workspaceName) return json({ error: 'name required' }, 400)
@@ -580,7 +619,6 @@ export const handleAuth = async (req, env, domain) => {
     const roomId = dmNotifyMatch[1]
     const room = await env.KV.get(`dm:${roomId}`, { type: 'json' })
     if (!room || !isRoomMember(room, found.pubkey)) return json({ error: 'forbidden' }, 403)
-    const ttl = 7 * 24 * 60 * 60
     for (const pubkey of room.members) {
       if (pubkey !== found.pubkey) {
         const existing = (await env.KV.get(`dm-pending:${pubkey}`, { type: 'json' })) || []
@@ -693,7 +731,8 @@ export const handleAuth = async (req, env, domain) => {
     const threads = await env.KV.get('threads', { type: 'json' }) || []
     const thread = threads.find(t => t.id === id)
     if (!thread) return json({ error: 'not found' }, 404)
-    if (!canCloseThread(found.pubkey, thread, env)) return json({ error: 'forbidden' }, 403)
+    const kvAdmins = (await env.KV.get('admins', { type: 'json' })) || []
+    if (!canCloseThread(found.pubkey, thread, env, kvAdmins)) return json({ error: 'forbidden' }, 403)
     await env.KV.put('threads', JSON.stringify(threads.filter(t => t.id !== id)))
     await broadcastToRooms(JSON.stringify({ type: 'thread_deleted', id }), env)
     return json({ ok: true })
@@ -717,6 +756,36 @@ export const handleAuth = async (req, env, domain) => {
     if (method === 'DELETE') {
       await env.KV.delete(`push:${found.pubkey}`)
       return json({ ok: true })
+    }
+  }
+
+  // — Admin promote / demote —
+  if (method === 'GET' && path === '/api/admin/admins') {
+    const found = await requireSession()
+    if (!found || !isOwnerPubkey(found.pubkey, env)) return json({ error: 'unauthorized' }, 401)
+    return json((await env.KV.get('admins', { type: 'json' })) || [])
+  }
+
+  const adminPubkeyMatch = path.match(/^\/api\/admin\/admins\/(.+)$/)
+  if (adminPubkeyMatch) {
+    const found = await requireSession()
+    if (!found || !isOwnerPubkey(found.pubkey, env)) return json({ error: 'unauthorized' }, 401)
+    const target = adminPubkeyMatch[1]
+    const member = await env.KV.get(target)
+    if (!member) return json({ error: 'not found' }, 404)
+    if (isOwnerPubkey(target, env)) return json({ error: 'already owner' }, 400)
+    const kvAdmins = (await env.KV.get('admins', { type: 'json' })) || []
+    if (method === 'POST') {
+      if (!kvAdmins.includes(target)) {
+        kvAdmins.push(target)
+        await env.KV.put('admins', JSON.stringify(kvAdmins))
+      }
+      return json({ ok: true, admins: kvAdmins })
+    }
+    if (method === 'DELETE') {
+      const updated = kvAdmins.filter(p => p !== target)
+      await env.KV.put('admins', JSON.stringify(updated))
+      return json({ ok: true, admins: updated })
     }
   }
 

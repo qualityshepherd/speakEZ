@@ -35,8 +35,8 @@ export const toggleEmoji = (reactions, pubkey, emoji) => {
 export const getInvitableMentions = (text, allMembers, roomMembers, senderPubkey) =>
   parseMentions(text, allMembers).filter(pk => pk !== senderPubkey && !roomMembers.includes(pk))
 
-export const canModify = (pubkey, msgFromPubkey, admins = '') =>
-  pubkey === msgFromPubkey || admins.split(',').map(s => s.trim()).filter(Boolean).includes(pubkey)
+export const canModify = (pubkey, msgFromPubkey, owner = '', kvAdmins = []) =>
+  pubkey === msgFromPubkey || (owner && pubkey === owner.trim()) || (Array.isArray(kvAdmins) && kvAdmins.includes(pubkey))
 
 const nextMidnight = () => {
   const d = new Date()
@@ -288,7 +288,7 @@ export class ChatRoom {
         let m
         try { m = JSON.parse(envelope) } catch { continue }
         if (m.id === parsed.id) {
-          if (!canModify(pubkey, m.from?.pubkey, this.env.ADMINS)) return
+          if (!canModify(pubkey, m.from?.pubkey, this.env.OWNER)) return
         }
         if (m.id === parsed.id || m.replyTo?.id === parsed.id) toDelete.push({ key, id: m.id })
       }
@@ -342,7 +342,7 @@ export class ChatRoom {
         let m
         try { m = JSON.parse(envelope) } catch { continue }
         if (m.id === id) {
-          if (!canModify(pubkey, m.from?.pubkey, this.env.ADMINS)) return
+          if (!canModify(pubkey, m.from?.pubkey, this.env.OWNER)) return
           m.text = text.slice(0, 2000)
           m.edited = true
           const newEnvelope = JSON.stringify(m)

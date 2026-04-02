@@ -5,7 +5,7 @@ compatibility_date = "2025-01-01"
 [vars]
 DOMAIN = "speakez.brine.dev"
 CONTACT = "ack@brine.dev"
-ADMINS = "XCIrv0pgfgF3DjBBNuO0dQkIWFbZyqHDZBWVjMHKhC8"  # comma-separated pubkeys that can kick members
+OWNER = "XCIrv0pgfgF3DjBBNuO0dQkIWFbZyqHDZBWVjMHKhC8"  # single pubkey; the sovereign — promotes/demotes admins
 
 [assets]
 directory = "assets"

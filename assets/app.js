@@ -157,7 +157,10 @@ modalSave.addEventListener('click', async () => {
 })
 
 modalLogout.addEventListener('click', () => {
-  localStorage.clear()
+  localStorage.removeItem('session')
+  localStorage.removeItem('name')
+  localStorage.removeItem('avatar')
+  localStorage.removeItem('workspaceName')
   location.href = '/login.html'
 })
 
@@ -278,8 +281,18 @@ const renderInviteList = (invites) => {
       : invite.status === 'used'
         ? '<span class="invite-meta invite-status-used">used</span>'
         : '<span class="invite-meta invite-status-expired">expired</span>'
+    const creatorName = invite.createdBy
+      ? (state.allMembers.get(invite.createdBy)?.name || invite.createdBy.slice(0, 8))
+      : ''
+    const meta = [
+      invite.note ? esc(invite.note) : '',
+      creatorName ? `by ${esc(creatorName)}` : ''
+    ].filter(Boolean).join(' · ')
     row.innerHTML = `
-      <span class="invite-code">${esc(invite.code.split('_')[1] ?? invite.code)}</span>
+      <div style="flex:1;min-width:0">
+        <span class="invite-code">${esc(invite.code.split('_')[1] ?? invite.code)}</span>
+        ${meta ? `<div style="font-size:0.75rem;color:var(--muted);margin-top:0.15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${meta}</div>` : ''}
+      </div>
       ${statusLabel}
       ${invite.status === 'fresh' ? '<button class="invite-copy-btn" aria-label="Copy invite link">copy</button>' : ''}
       <button class="invite-del-btn" aria-label="Delete invite">×</button>
@@ -340,16 +353,19 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && inviteModa
 
 document.getElementById('invite-generate').addEventListener('click', async () => {
   const btn = document.getElementById('invite-generate')
+  const noteEl = document.getElementById('invite-note')
   btn.disabled = true
   setInviteMsg('generating...')
   try {
     const res = await fetch('/api/invite', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${session.token}` }
+      headers: { Authorization: `Bearer ${session.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: noteEl.value.trim() })
     })
     if (res.status === 401) { location.href = '/login.html'; return }
     if (!res.ok) { setInviteMsg('failed to create invite.', 'danger'); btn.disabled = false; return }
     setInviteMsg('')
+    noteEl.value = ''
     const newInvite = await res.json()
     cachedInvites = [{ ...newInvite, status: 'fresh' }, ...cachedInvites.filter(i => i.code !== newInvite.code)]
     renderInviteList(cachedInvites)
@@ -412,14 +428,29 @@ export const showMemberPopover = (member, anchorEl) => {
     : ''
   const canKick = state.isAdmin && member.pubkey !== session.pubkey
   const canDm = member.pubkey !== session.pubkey
+  const isKvAdmin = state.isOwner && state.kvAdmins.includes(member.pubkey)
+  const canShield = state.isOwner && member.pubkey !== session.pubkey
   const dmIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>'
+  const shieldIcon = isKvAdmin
+    ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2L4 5v6c0 5.25 3.5 10.15 8 11.35C16.5 21.15 20 16.25 20 11V5l-8-3z"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L4 5v6c0 5.25 3.5 10.15 8 11.35C16.5 21.15 20 16.25 20 11V5l-8-3z"/></svg>'
+  const joinedStr = member.joinedAt
+    ? `joined ${new Date(member.joinedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+    : ''
+  const inviterName = member.invitedBy
+    ? (state.allMembers.get(member.invitedBy)?.name || member.invitedBy.slice(0, 8))
+    : ''
+  const invitedStr = inviterName ? `invited by ${esc(inviterName)}` : ''
+  const memberMeta = [joinedStr, invitedStr].filter(Boolean).join(' · ')
   popoverEl.innerHTML = `
     ${avatarHtml}
     <div class="member-popover-placeholder" style="background:${color};${member.avatar ? 'display:none' : ''}">${esc((member.name || '?')[0].toUpperCase())}</div>
     <div class="member-popover-name">${esc(member.name || 'unknown')}</div>
+    ${memberMeta ? `<div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.15rem">${memberMeta}</div>` : ''}
     <div class="member-popover-key" title="click to copy">${esc(member.pubkey)}</div>
     <div class="member-popover-actions">
       ${canDm ? `<button class="member-popover-action member-popover-dm" title="Message">${dmIcon}</button>` : ''}
+      ${canShield ? `<button class="member-popover-action member-popover-shield" title="${isKvAdmin ? 'Remove admin' : 'Make admin'}">${shieldIcon}</button>` : ''}
       ${canKick ? '<button class="member-popover-action member-popover-kick" title="Kick" style="color:#CC0000"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2 22L2 14L6 10L19 2C21 0 24 2 22 6L14 15L18 15L18 21Q18 23 16 23L4 23Q2 23 2 22Z"/></svg></button>' : ''}
     </div>`
 
@@ -445,6 +476,23 @@ export const showMemberPopover = (member, anchorEl) => {
       renderSidebar()
     } catch {}
   })
+
+  if (canShield) {
+    popoverEl.querySelector('.member-popover-shield').addEventListener('click', async () => {
+      const method = isKvAdmin ? 'DELETE' : 'POST'
+      try {
+        const res = await fetch(`/api/admin/admins/${member.pubkey}`, {
+          method,
+          headers: { Authorization: `Bearer ${session.token}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          state.kvAdmins = data.admins || []
+          closePopover()
+        }
+      } catch {}
+    })
+  }
 
   if (canKick) {
     popoverEl.querySelector('.member-popover-kick').addEventListener('click', async () => {
@@ -535,6 +583,8 @@ export const fetchBoot = async () => {
     if (!res.ok) return
     const d = await res.json()
     state.isAdmin = !!d.isAdmin
+    state.isOwner = !!d.isOwner
+    state.kvAdmins = d.kvAdmins || []
     if (d.name) localStorage.setItem('name', d.name)
     else localStorage.removeItem('name')
     if (d.avatar) localStorage.setItem('avatar', d.avatar)

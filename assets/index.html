@@ -161,6 +161,10 @@
         <button class="modal-close" id="invite-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body">
+        <div class="field">
+          <label for="invite-note">note (private — who is this?)</label>
+          <textarea id="invite-note" rows="2" placeholder="Jesse, podcast co-host..." style="resize:vertical;min-height:3rem"></textarea>
+        </div>
         <button class="invite-generate" id="invite-generate">generate invite link</button>
         <div class="invite-modal-msg" id="invite-modal-msg" role="status" aria-live="polite"></div>
         <div class="invite-list" id="invite-list"></div>

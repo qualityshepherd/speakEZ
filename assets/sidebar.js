@@ -280,8 +280,8 @@ export const makeThreadItem = (thread) => {
   const unread = unreadChannels.has(thread.id) ? '<span class="channel-unread" aria-label="unread messages"></span>' : ''
   const canClose = state.isAdmin || thread.createdBy === session?.pubkey
   const closeBtn = canClose
-    ? `<button class="channel-del" title="close thread">×</button>`
-    : `<button class="channel-del dm-leave-btn" title="Leave thread"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z"/></svg></button>`
+    ? '<button class="channel-del" title="close thread">×</button>'
+    : '<button class="channel-del dm-leave-btn" title="Leave thread"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z"/></svg></button>'
   el.innerHTML = `<span class="channel-icon">${threadIcon}</span><span class="channel-name">${esc(thread.name)}</span>${unread}${closeBtn}`
   el.addEventListener('click', e => {
     if (e.target.classList.contains('channel-del')) return
@@ -411,8 +411,7 @@ roomDescEl?.addEventListener('click', () => {
     setRoomDesc(val || (dm ? DM_DESC_PLACEHOLDER : ''), !!(dm || thread) || state.isAdmin)
   }
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); commit() }
-    else if (e.key === 'Escape') { committed = true; input.replaceWith(roomDescEl) }
+    if (e.key === 'Enter') { e.preventDefault(); commit() } else if (e.key === 'Escape') { committed = true; input.replaceWith(roomDescEl) }
   })
   input.addEventListener('blur', commit)
 })
