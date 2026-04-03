@@ -54,6 +54,19 @@ export default {
       return new Response(obj.body, { headers })
     }
 
+    if (path.startsWith('/api/presence/') && req.method === 'GET') {
+      const token = req.headers.get('authorization')?.replace('Bearer ', '')
+      const found = await memberByToken(token, env.KV)
+      if (!found) return new Response('unauthorized', { status: 401 })
+      const room = path.slice('/api/presence/'.length)
+      if (!room) return new Response('bad request', { status: 400 })
+      const dmRoom = await env.KV.get(`dm:${room}`, { type: 'json' })
+      if (dmRoom && !isRoomMember(dmRoom, found.pubkey)) return new Response('forbidden', { status: 403 })
+      const list = await env.KV.list({ prefix: `presence:${room}:`, include: ['metadata'] })
+      const members = list.keys.map(k => k.metadata).filter(Boolean)
+      return new Response(JSON.stringify(members), { headers: { 'Content-Type': 'application/json' } })
+    }
+
     const channelMatch = path.match(/^\/api\/channel\/([^/]+)\/.+$/)
     if (channelMatch) {
       const token = req.headers.get('authorization')?.replace('Bearer ', '')
@@ -78,6 +91,9 @@ export default {
         if (!isRoomMember(dmRoom, found.pubkey)) return new Response('forbidden', { status: 403 })
         ctx.waitUntil(env.KV.put(`dm:${room}`, JSON.stringify({ ...dmRoom, lastActivity: Date.now() })))
       }
+
+      const presenceData = { pubkey: found.pubkey, name: found.member.name || '', avatar: found.member.avatar || '' }
+      ctx.waitUntil(env.KV.put(`presence:${room}:${found.pubkey}`, '1', { expirationTtl: 180, metadata: presenceData }))
 
       const id = env.CHAT_ROOM.idFromName(room)
       const stub = env.CHAT_ROOM.get(id)

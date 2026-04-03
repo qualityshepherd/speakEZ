@@ -19,7 +19,7 @@
     "env": ["browser"],
     "globals": [
       "HTMLRewriter", "WebSocketPair", "DurableObject",
-      "MINIFLARE", "clients", "skipWaiting", "axe", "marked"
+      "MINIFLARE", "clients", "skipWaiting", "axe", "marked", "WebSocketRequestResponsePair"
     ],
     "rules": {
       "import/no-absolute-path": 0,

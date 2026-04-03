@@ -11,6 +11,20 @@ const isTouchDevice = () => window.matchMedia('(hover: none) and (pointer: coars
 
 let reconnectTimer = null
 
+const fetchPresence = (room) => {
+  if (!session.token) return
+  fetch(`/api/presence/${encodeURIComponent(room)}`, { headers: { Authorization: `Bearer ${session.token}` } })
+    .then(r => r.ok ? r.json() : null)
+    .then(members => {
+      if (!members) return
+      state.onlineMembers.clear()
+      for (const m of members) {
+        if (m.pubkey) { state.onlineMembers.set(m.pubkey, m); state.allMembers.set(m.pubkey, m) }
+      }
+      import('./app.js').then(({ renderOnline }) => renderOnline())
+    }).catch(() => {})
+}
+
 const typingEl = document.getElementById('typing-indicator')
 const typingUsers = new Map()
 const pendingLeaves = new Map()
@@ -45,8 +59,14 @@ export const connect = (room = state.activeChannelId) => {
   state.ws.addEventListener('open', () => {
     chatInput.disabled = false
     sendBtn.disabled = false
+    const uploadBtn = document.getElementById('upload-btn')
+    const recordBtn = document.getElementById('record-btn')
+    if (uploadBtn) uploadBtn.disabled = false
+    if (recordBtn) recordBtn.disabled = false
+    import('./ui-helpers.js').then(({ flushOutbox }) => flushOutbox())
     const focused = document.activeElement
     if (!isTouchDevice() && (!focused || focused === document.body || focused === chatInput)) chatInput.focus()
+    fetchPresence(room)
     refreshUnread()
     fetch('/api/dm', { headers: sidebarAuth() })
       .then(res => res.ok ? res.json() : null)
@@ -59,9 +79,9 @@ export const connect = (room = state.activeChannelId) => {
         if (changed) renderSidebar()
       }).catch(() => {})
     const ping = setInterval(() => {
-      if (state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' }))
+      if (state.ws.readyState === WebSocket.OPEN) state.ws.send('ping')
       else clearInterval(ping)
-    }, 10000)
+    }, 20000)
     state.ws.addEventListener('close', () => clearInterval(ping), { once: true })
   })
 
@@ -92,7 +112,6 @@ export const connect = (room = state.activeChannelId) => {
         renderTyping()
       } else if (msg.type === 'presence') {
         pendingLeaves.forEach(t => clearTimeout(t)); pendingLeaves.clear()
-        state.onlineMembers.clear()
         for (const m of (msg.members || [])) {
           if (m.pubkey) { state.onlineMembers.set(m.pubkey, m); state.allMembers.set(m.pubkey, m) }
         }
@@ -185,10 +204,6 @@ export const connect = (room = state.activeChannelId) => {
   })
 
   state.ws.addEventListener('close', () => {
-    chatInput.disabled = true
-    sendBtn.disabled = true
-    state.onlineMembers.clear()
-    import('./app.js').then(({ renderOnline }) => renderOnline())
     typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
     reconnectTimer = setTimeout(() => connect(state.activeChannelId), 1000)
   })
@@ -205,7 +220,5 @@ const reconnectIfDead = () => {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reconnectIfDead() })
 window.addEventListener('online', reconnectIfDead)
 document.addEventListener('focusin', e => {
-  if (e.target.matches('input, textarea') && state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 'ping' }))
-  }
+  if (e.target.matches('input, textarea')) reconnectIfDead()
 })

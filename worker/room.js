@@ -4,7 +4,7 @@ export const sanitizeFtsQuery = (q) => {
   const specials = '"*+-().[]:^$|\\'
   return specials
     .split('')
-    .reduce((acc, char) => acc.split(char).join(' '), q)
+    .reduce((acc, char) => acc.split(char).join(' '), q.slice(0, 200))
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -49,6 +49,9 @@ export class ChatRoom {
   constructor (state, env) {
     this.state = state
     this.env = env
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair('ping', 'pong')
+    )
   }
 
   async _ensureAlarm () {
@@ -302,11 +305,6 @@ export class ChatRoom {
             try { peer.send(broadcast) } catch {}
           }
         }
-      } else {
-        const broadcast = JSON.stringify({ type: 'delete', id: parsed.id })
-        for (const peer of this.state.getWebSockets()) {
-          try { peer.send(broadcast) } catch {}
-        }
       }
       return
     }
@@ -377,6 +375,7 @@ export class ChatRoom {
     })
 
     await this.state.storage.put(`msg:${ts}:${id}`, envelope)
+    this.state.storage.put('room_last_activity', Date.now()).catch(() => {})
     this._ftsInsert(id, ts, envelope, parsed.text.slice(0, 2000))
 
     for (const peer of this.state.getWebSockets()) {
@@ -520,6 +519,15 @@ export class ChatRoom {
     try { if (closeWs) ws.close(code, reason) } catch {}
     const { pubkey } = ws.deserializeAttachment()
     if (pubkey) {
+      const otherSessions = this.state.getWebSockets().filter(s => {
+        try { return s.deserializeAttachment().pubkey === pubkey } catch { return false }
+      })
+      if (otherSessions.length === 0) {
+        const roomId = this._roomId || await this.state.storage.get('room_id')
+        if (roomId && this.env.KV) {
+          this.env.KV.delete(`presence:${roomId}:${pubkey}`).catch(() => {})
+        }
+      }
       const leave = JSON.stringify({ type: 'leave', pubkey })
       for (const peer of this.state.getWebSockets()) {
         try { peer.send(leave) } catch {}

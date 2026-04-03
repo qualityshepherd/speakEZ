@@ -20,14 +20,28 @@ const sendTyping = () => {
   state.ws.send(JSON.stringify({ type: 'typing' }))
 }
 
+const outbox = []
+
+export const flushOutbox = () => {
+  while (outbox.length && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(outbox.shift())
+  }
+}
+
 export const sendMessage = () => {
   const raw = chatInput.value.trim()
-  if (!raw || state.ws?.readyState !== WebSocket.OPEN) return
+  if (!raw) return
   clearTimeout(typingTimer); typingTimer = null
   const diceResult = parseDiceCommand(raw)
   const text = diceResult ?? raw
   const replyTo = getReplyTo()
-  state.ws.send(JSON.stringify({ text, ...(replyTo ? { replyTo } : {}) }))
+  const payload = JSON.stringify({ text, ...(replyTo ? { replyTo } : {}) })
+  if (state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(payload)
+  } else {
+    outbox.push(payload)
+    import('./ws-handler.js').then(({ connect }) => connect(state.activeChannelId))
+  }
   chatInput.value = ''
   chatInput.style.height = 'auto'
   clearReply()

@@ -89,6 +89,16 @@ test('sanitizeFtsQuery: empty string returns empty string', t => {
   t.is(sanitizeFtsQuery(''), '')
 })
 
+test('sanitizeFtsQuery: truncates query over 200 chars', t => {
+  const long = 'a'.repeat(300)
+  t.is(sanitizeFtsQuery(long).length, 200)
+})
+
+test('sanitizeFtsQuery: query at exactly 200 chars passes unchanged', t => {
+  const exact = 'a'.repeat(200)
+  t.is(sanitizeFtsQuery(exact), exact)
+})
+
 // — parseMentions —
 
 const members = [
