@@ -1,6 +1,6 @@
 # speakEZ
 
-Group chat that stops at your circle. Invite-only. Not a platform. A sovereign signal. No accounts. No tracking. No one in the middle. 
+Group chat that stops at your circle. Invite-only. Not a platform, a sovereign signal. No accounts. No tracking. No one in the middle. 
 
 Text, voice, and video running on Cloudflare's free tier.
 
@@ -8,7 +8,7 @@ Text, voice, and video running on Cloudflare's free tier.
 
 [Dunbar's number](https://en.wikipedia.org/wiki/Dunbar's_number) is the ceiling. Reach is a design smell. The invite _is_ moderation. That and kick.
 
-* **Identity via Math**: Your passphrase becomes an Ed25519 keypair. The public key is your user ID. Your passphrase is never stored and should never leave your head. Forget it, and you start over.
+* **Zero-knowledge Login**: Your passphrase becomes an Ed25519 keypair. The public key is your user ID. Your passphrase is never stored and should never leave your head. Forget it, and you start over.
 * **No Paper Trails**: No accounts. No emails. No recovery flows. No biometric scans. Your public key is your identity.
 * **Limited Access by Design**: Invites are single-use and expire in 48 hours.
 * **No Middlemen**: Chat runs over WebSockets backed by Durable Objects and R2. Voice runs peer-to-peer over WebRTC.

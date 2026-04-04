@@ -315,7 +315,8 @@ export const handleAuth = async (req, env, domain) => {
 
   if (method === 'POST' && path === '/api/login') {
     const ip = req.headers.get('CF-Connecting-IP') || 'unknown'
-    const rlKey = `ratelimit:login:${ip}`
+    let _rlPubkey; try { _rlPubkey = (await req.clone().json()).pubkey?.slice(0, 8) } catch {}
+    const rlKey = `ratelimit:login:${ip}:${_rlPubkey || 'anon'}`
     const rlRecord = await env.KV.get(rlKey, { type: 'json' })
     if (isRateLimited(rlRecord, Date.now(), 6)) {
       console.warn(`[rate-limit] login blocked ip=${ip} count=${rlRecord.count}`)

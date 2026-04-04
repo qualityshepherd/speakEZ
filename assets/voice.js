@@ -40,9 +40,10 @@ export const hiddenVideoPeers = new Set()
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
 
 const SESSION_MIME = (() => {
-  if (isIOS) return 'audio/webm;codecs=opus'
-  const prefer = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-  return prefer.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm'
+  const prefer = isIOS
+    ? ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus']
+    : ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+  return prefer.find(t => MediaRecorder.isTypeSupported(t)) || ''
 })()
 
 let audioConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -425,6 +426,12 @@ const initPeer = (pubkey, member, initiator) => {
   }
   pc.onconnectionstatechange = () => {
     console.log(`[webrtc] ${pubkey.slice(0, 8)} -> ${pc.connectionState}`)
+    if (pc.connectionState === 'failed') {
+      const name = voiceMembers.get(pubkey)?.name || pubkey.slice(0, 8)
+      voiceBar.title = `Connection to ${name} failed`
+      voiceBar.classList.add('ice-failed')
+      setTimeout(() => voiceBar.classList.remove('ice-failed'), 4000)
+    }
     if (['failed', 'closed'].includes(pc.connectionState)) closePeer(pubkey)
     if (pc.connectionState === 'connected') {
       pc.getSenders().forEach(sender => {
@@ -508,8 +515,7 @@ const startTrackRecording = (pubkey, sourceNode, name, videoTrack) => {
     tracks.push(videoTrack)
   }
   const recStream = new MediaStream(tracks)
-  const mimeType = SESSION_MIME
-  const rec = new MediaRecorder(recStream, { mimeType })
+  const rec = SESSION_MIME ? new MediaRecorder(recStream, { mimeType: SESSION_MIME }) : new MediaRecorder(recStream)
   const chunks = []
   rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
   rec.onstop = () => {

@@ -777,6 +777,9 @@ body.in-voice { height: calc(100dvh - var(--voice-bar-h, 72px)); }
 .mention-picker-item:hover, .mention-picker-item.active { background: var(--surface-2); color: var(--accent); }
 .chat-input-row { position: relative; }
 
+#voice-bar.ice-failed { border-top-color: #e57373; }
+#voice-bar.ice-failed::before { content: 'connection failed'; position: absolute; top: -1.4rem; left: 50%; transform: translateX(-50%); background: #e57373; color: #fff; font-size: 0.7rem; padding: 0.1rem 0.5rem; border-radius: 3px 3px 0 0; white-space: nowrap; pointer-events: none; }
+
 @media (max-width: 540px) {
   #voice-bar { padding: 0.4rem 0.6rem; gap: 0.5rem; }
   .voice-bar-controls { gap: 0.25rem; }
