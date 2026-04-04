@@ -173,7 +173,7 @@ const key = (name) => ({ name })
 
 test('countPresenceByRoom: single user in one room', t => {
   const counts = countPresenceByRoom([key('presence:general:pk1')])
-  t.is(counts['general'], 1)
+  t.is(counts.general, 1)
 })
 
 test('countPresenceByRoom: multiple users in same room', t => {
@@ -182,7 +182,7 @@ test('countPresenceByRoom: multiple users in same room', t => {
     key('presence:voice:pk2'),
     key('presence:voice:pk3')
   ])
-  t.is(counts['voice'], 3)
+  t.is(counts.voice, 3)
 })
 
 test('countPresenceByRoom: users spread across rooms', t => {
@@ -206,11 +206,11 @@ test('countPresenceByRoom: malformed keys (wrong segment count) are ignored', t 
     key('presence:room:pk1:extra'),
     key('presence:room:pk2')
   ])
-  t.is(counts['onlytwo'], undefined)
-  t.is(counts['room'], 1)
+  t.is(counts.onlytwo, undefined)
+  t.is(counts.room, 1)
 })
 
 test('countPresenceByRoom: room with no users returns undefined (not 0)', t => {
   const counts = countPresenceByRoom([key('presence:voice:pk1')])
-  t.is(counts['other'], undefined)
+  t.is(counts.other, undefined)
 })

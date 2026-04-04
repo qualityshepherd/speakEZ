@@ -1,6 +1,8 @@
 import { sendPush } from './push.js'
 import { broadcastToRooms } from './auth.js'
 
+const MAX_MSG_LENGTH = 4200
+
 export const sanitizeFtsQuery = (q) => {
   const specials = '"*+-().[]:^$|\\'
   return specials
@@ -342,7 +344,7 @@ export class ChatRoom {
         try { m = JSON.parse(envelope) } catch { continue }
         if (m.id === id) {
           if (!canModify(pubkey, m.from?.pubkey, this.env.OWNER)) return
-          m.text = text.slice(0, 2000)
+          m.text = text.slice(0, MAX_MSG_LENGTH)
           m.edited = true
           const newEnvelope = JSON.stringify(m)
           await this.state.storage.put(key, newEnvelope)
@@ -370,14 +372,14 @@ export class ChatRoom {
       type: 'message',
       id,
       from: { pubkey, name, avatar },
-      text: parsed.text.slice(0, 2000),
+      text: parsed.text.slice(0, MAX_MSG_LENGTH),
       ts,
       ...(replyTo ? { replyTo } : {})
     })
 
     await this.state.storage.put(`msg:${ts}:${id}`, envelope)
     this.state.storage.put('room_last_activity', Date.now()).catch(() => {})
-    this._ftsInsert(id, ts, envelope, parsed.text.slice(0, 2000))
+    this._ftsInsert(id, ts, envelope, parsed.text.slice(0, MAX_MSG_LENGTH))
 
     for (const peer of this.state.getWebSockets()) {
       try { peer.send(envelope) } catch {}
@@ -386,7 +388,7 @@ export class ChatRoom {
     // Push notifications — fire and forget
     this._pushDmNotify(pubkey, name, parsed.text).catch(() => {})
     this._pushMentionNotify(pubkey, name, parsed.text).catch(() => {})
-    this._dmInviteMentioned(pubkey, parsed.text.slice(0, 2000)).catch(() => {})
+    this._dmInviteMentioned(pubkey, parsed.text.slice(0, MAX_MSG_LENGTH)).catch(() => {})
   }
 
   async _pushMentionNotify (senderPubkey, senderName, text) {
