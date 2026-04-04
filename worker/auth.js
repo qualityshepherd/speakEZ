@@ -158,7 +158,7 @@ const removeDmFromMember = async (pubkey, roomId, kv) => {
   await kv.put(`dm-member:${pubkey}`, JSON.stringify(rooms.filter(r => r !== roomId)))
 }
 
-const broadcastToRooms = async (message, env) => {
+export const broadcastToRooms = async (message, env) => {
   if (!env.CHAT_ROOM) return
   try {
     const sidebar = await env.KV.get('sidebar', { type: 'json' }) || { channels: [{ id: 'general' }] }
@@ -373,6 +373,18 @@ export const handleAuth = async (req, env, domain) => {
 
     if (method === 'GET') {
       const sidebar = await env.KV.get('sidebar', { type: 'json' }) || DEFAULT_SIDEBAR
+      const voiceChannels = (sidebar.channels || []).filter(c => c.type === 'voice')
+      if (voiceChannels.length > 0) {
+        const allPresence = await env.KV.list({ prefix: 'presence:' })
+        const counts = {}
+        for (const key of allPresence.keys) {
+          const parts = key.name.split(':')
+          if (parts.length === 3) counts[parts[1]] = (counts[parts[1]] || 0) + 1
+        }
+        sidebar.channels = sidebar.channels.map(ch =>
+          ch.type === 'voice' ? { ...ch, voiceCount: counts[ch.id] || 0 } : ch
+        )
+      }
       return json(sidebar)
     }
   }
@@ -535,7 +547,11 @@ export const handleAuth = async (req, env, domain) => {
       `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate`,
       { method: 'POST', headers: { Authorization: `Bearer ${env.TURN_SECRET}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl: 86400 }) }
     )
-    if (!res.ok) return json({ error: 'failed to get turn credentials' }, 502)
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '')
+      console.error(`[turn] CF API ${res.status}: ${errBody}`)
+      return json({ error: 'failed to get turn credentials', status: res.status, detail: errBody }, 502)
+    }
     const creds = await res.json()
     return json(creds)
   }

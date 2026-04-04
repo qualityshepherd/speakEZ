@@ -314,7 +314,8 @@ export const makeChannel = (ch) => {
   if (ch.type === 'voice') {
     const membersSpan = document.createElement('span')
     membersSpan.className = 'voice-members'
-    if (state.activeVoiceChannel === ch.id) membersSpan.textContent = `${voice.voiceMembers.size + 1}`
+    const count = state.activeVoiceChannel === ch.id ? voice.voiceMembers.size + 1 : (ch.voiceCount || 0)
+    if (count > 0) membersSpan.textContent = `${count}`
     el.querySelector('.channel-name').after(membersSpan)
     el.classList.toggle('active', state.activeVoiceChannel === ch.id)
     el.addEventListener('click', e => {

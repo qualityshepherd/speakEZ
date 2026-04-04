@@ -7,10 +7,10 @@ let ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls
 const refreshTurnCredentials = async () => {
   try {
     const res = await fetch('/api/turn', { headers: { Authorization: `Bearer ${session.token}` } })
-    if (!res.ok) return
+    if (!res.ok) { console.warn(`[turn] failed ${res.status} — falling back to STUN only`); return }
     const { iceServers } = await res.json()
-    if (iceServers?.length) ICE_CONFIG = { iceServers }
-  } catch {}
+    if (iceServers?.length) { ICE_CONFIG = { iceServers }; console.log('[turn] credentials loaded', iceServers.map(s => s.urls)) }
+  } catch (e) { console.warn('[turn] error', e) }
 }
 
 export let voiceWs = null
@@ -30,12 +30,17 @@ let loopbackSrc = null
 export const voiceMembers = new Map()
 export const peerConns = new Map()
 export const peerGains = new Map()
+export const peerSrcs = new Map()
+const peerAudios = new Map()
 export const peerGainValues = new Map()
 export const peerVideoTracks = new Map()
 export const sessionTracks = new Map()
 export const hiddenVideoPeers = new Set()
 
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+
 const SESSION_MIME = (() => {
+  if (isIOS) return 'audio/webm;codecs=opus'
   const prefer = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
   return prefer.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm'
 })()
@@ -44,8 +49,9 @@ let audioConstraints = { echoCancellation: false, noiseSuppression: false, autoG
 let gateThreshold = 0.7
 let gateGain = null
 let gatedStream = null
-let gateOpen = false
+let gateOpen = true
 let gateHoldTimer = null
+const pendingAudio = new Map()
 
 const speakingSet = new Set()
 let speakInterval = null
@@ -68,7 +74,6 @@ const voiceGrid = document.getElementById('voice-grid')
 const SVG_MIC_ON = '<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>'
 const SVG_MIC_OFF = '<path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.34 3 3 3 .23 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/>'
 
-// — Volume popover —
 let volPopoverPubkey = null
 const closeVolPopover = () => {
   document.getElementById('voice-vol-popover')?.remove()
@@ -78,12 +83,12 @@ const openVolPopover = (wrap, pubkey) => {
   if (volPopoverPubkey === pubkey) { closeVolPopover(); return }
   closeVolPopover()
   volPopoverPubkey = pubkey
-  const db = peerGainValues.get(pubkey) ?? 0
+  const db = Math.min(0, peerGainValues.get(pubkey) ?? 0)
   const pop = document.createElement('div')
   pop.id = 'voice-vol-popover'
   pop.className = 'voice-vol-popover'
   pop.innerHTML = `<label>${esc(voiceMembers.get(pubkey)?.name || pubkey.slice(0, 8))}</label>
-    <input type="range" min="-60" max="6" step="1" value="${db}">
+    <input type="range" min="-60" max="0" step="1" value="${Math.min(0, db)}">
     <span class="vol-val">${db >= 0 ? '+' : ''}${db} dB</span>`
   wrap.style.position = 'relative'
   wrap.appendChild(pop)
@@ -95,12 +100,13 @@ const openVolPopover = (wrap, pubkey) => {
     valEl.textContent = `${v >= 0 ? '+' : ''}${v} dB`
     const g = peerGains.get(pubkey)
     if (g) g.gain.value = Math.pow(10, v / 20)
+    const a = peerAudios.get(pubkey)
+    if (a) a.volume = Math.min(1, Math.pow(10, v / 20))
   })
   pop.addEventListener('click', e => e.stopPropagation())
 }
 document.addEventListener('click', closeVolPopover)
 
-// — Avatar canvas track for recording while camera off —
 export const makeAvatarCanvasTrack = () => {
   const name = localStorage.getItem('name') || session.pubkey.slice(0, 8)
   const color = avatarColor(session.pubkey)
@@ -120,7 +126,6 @@ export const makeAvatarCanvasTrack = () => {
   return canvas.captureStream(5).getVideoTracks()[0]
 }
 
-// — Voice avatar (bar) —
 const makeVoiceAvatar = (m) => {
   const wrap = document.createElement('div')
   wrap.className = 'voice-avatar-wrap'
@@ -144,7 +149,7 @@ const makeVoiceAvatar = (m) => {
   wrap.appendChild(name)
   wrap.addEventListener('click', e => {
     e.stopPropagation()
-    openGrid()
+    openVolPopover(wrap, m.pubkey)
   })
   return wrap
 }
@@ -169,21 +174,21 @@ export const renderVoiceBar = () => {
   renderSidebar()
 }
 
-// — Local audio pipeline —
 const setupLocalPipeline = (stream) => {
   if (localCtx) { try { localCtx.close() } catch {} }
   localCtx = new AudioContext({ sampleRate: 48000 })
+  localCtx.resume().catch(() => {})
   const src = localCtx.createMediaStreamSource(stream)
   const analyser = localCtx.createAnalyser()
   analyser.fftSize = 512
   gateGain = localCtx.createGain()
-  gateGain.gain.value = 0
+  gateGain.gain.value = 1
   const dest = localCtx.createMediaStreamDestination()
   src.connect(analyser)
   src.connect(gateGain)
   gateGain.connect(dest)
   gatedStream = dest.stream
-  gateOpen = false
+  gateOpen = true
   clearTimeout(gateHoldTimer); gateHoldTimer = null
   analysers.set(session.pubkey, { analyser })
 }
@@ -209,19 +214,17 @@ const tickSpeaking = () => {
     document.querySelector(`#vg-tiles [data-pubkey="${pubkey}"]`)?.classList.toggle('speaking', speaking)
     if (isSelf) {
       if (gateGain && localCtx) {
-        const shouldOpen = rms > gateThreshold && !muted
-        if (shouldOpen) {
-          clearTimeout(gateHoldTimer); gateHoldTimer = null
-          if (!gateOpen) {
-            gateOpen = true
-            gateGain.gain.setTargetAtTime(1, localCtx.currentTime, 0.005)
-          }
-        } else if (gateOpen && !gateHoldTimer) {
+        const shouldClose = rms < gateThreshold * 0.8 && !muted
+        if (shouldClose && gateOpen && !gateHoldTimer) {
           gateHoldTimer = setTimeout(() => {
             gateHoldTimer = null
             gateOpen = false
-            if (gateGain && localCtx) gateGain.gain.setTargetAtTime(0, localCtx.currentTime, 0.15)
-          }, 300)
+            if (gateGain && localCtx) gateGain.gain.setTargetAtTime(0, localCtx.currentTime, 0.1)
+          }, 500)
+        } else if (!shouldClose && !gateOpen) {
+          clearTimeout(gateHoldTimer); gateHoldTimer = null
+          gateOpen = true
+          if (gateGain && localCtx) gateGain.gain.setTargetAtTime(1, localCtx.currentTime, 0.02)
         }
       }
       const fill = document.getElementById('vlf')
@@ -231,14 +234,30 @@ const tickSpeaking = () => {
       }
       const vrms = document.getElementById('vrms')
       if (vrms) vrms.textContent = rms.toFixed(1)
+      if (voiceWs?.readyState === WebSocket.OPEN) {
+        voiceWs.send(JSON.stringify({
+          type: 'voice-speaking',
+          pubkey: session.pubkey,
+          speaking
+        }))
+      }
     }
   }
 }
 
-// — Remote audio —
 const addAudio = (pubkey, stream) => {
   removeAudio(pubkey)
-  if (!remoteCtx) return
+  if (!remoteCtx) { pendingAudio.set(pubkey, stream); return }
+  if (remoteCtx.state === 'suspended') remoteCtx.resume().catch(() => {})
+  if (!stream) { console.warn('[voice] addAudio: no stream for', pubkey.slice(0, 8)); return }
+  // Use <audio> element for output — remoteCtx.destination is unreliable in Chrome
+  const audio = new Audio()
+  audio.srcObject = stream
+  audio.volume = Math.min(1, Math.pow(10, (peerGainValues.get(pubkey) ?? 0) / 20))
+  if (activeOutputId && audio.setSinkId) audio.setSinkId(activeOutputId).catch(() => {})
+  audio.play().catch(err => console.warn('[voice] audio play failed', err))
+  peerAudios.set(pubkey, audio)
+  // Web Audio for analysis (speaking detection) and recording only
   const src = remoteCtx.createMediaStreamSource(stream)
   const gainNode = remoteCtx.createGain()
   gainNode.gain.value = Math.pow(10, (peerGainValues.get(pubkey) ?? 0) / 20)
@@ -246,22 +265,27 @@ const addAudio = (pubkey, stream) => {
   analyser.fftSize = 512
   src.connect(analyser)
   src.connect(gainNode)
-  gainNode.connect(remoteCtx.destination)
   if (sessionTracks.size > 0) {
     const name = voiceMembers.get(pubkey)?.name || pubkey.slice(0, 8)
     startTrackRecording(pubkey, gainNode, name)
   }
   analysers.set(pubkey, { analyser })
   peerGains.set(pubkey, gainNode)
+  peerSrcs.set(pubkey, src)
 }
 
 const removeAudio = (pubkey) => {
+  const audio = peerAudios.get(pubkey)
+  if (audio) { audio.pause(); audio.srcObject = null }
+  peerAudios.delete(pubkey)
+  try { peerSrcs.get(pubkey)?.disconnect() } catch {}
+  try { peerGains.get(pubkey)?.disconnect() } catch {}
+  peerSrcs.delete(pubkey)
   analysers.delete(pubkey)
   speakingSet.delete(pubkey)
   peerGains.delete(pubkey)
 }
 
-// — Video —
 export const addVideo = (pubkey, track) => {
   peerVideoTracks.set(pubkey, track)
   const wrap = voiceBarMems.querySelector(`[data-pubkey="${pubkey}"]`)
@@ -366,7 +390,6 @@ export const toggleCamera = async () => {
   }
 }
 
-// — Peers —
 const closePeer = (pubkey) => {
   peerConns.get(pubkey)?.close()
   peerConns.delete(pubkey)
@@ -388,8 +411,12 @@ const initPeer = (pubkey, member, initiator) => {
   }
 
   pc.ontrack = e => {
-    if (e.track.kind === 'audio') addAudio(pubkey, e.streams[0])
-    else if (e.track.kind === 'video') addVideo(pubkey, e.track)
+    const t = e.track
+    console.log(`[webrtc] ontrack ${pubkey.slice(0, 8)} kind=${t.kind} streams=${e.streams.length} muted=${t.muted} readyState=${t.readyState} enabled=${t.enabled} remoteCtx=${remoteCtx?.state}`)
+    t.onmute = () => console.log(`[webrtc] track muted ${pubkey.slice(0, 8)}`)
+    t.onunmute = () => console.log(`[webrtc] track unmuted ${pubkey.slice(0, 8)}`)
+    if (t.kind === 'audio') addAudio(pubkey, e.streams[0])
+    else if (t.kind === 'video') addVideo(pubkey, t)
   }
   pc.onicecandidate = e => {
     if (e.candidate && voiceWs?.readyState === WebSocket.OPEN) {
@@ -397,6 +424,7 @@ const initPeer = (pubkey, member, initiator) => {
     }
   }
   pc.onconnectionstatechange = () => {
+    console.log(`[webrtc] ${pubkey.slice(0, 8)} -> ${pc.connectionState}`)
     if (['failed', 'closed'].includes(pc.connectionState)) closePeer(pubkey)
     if (pc.connectionState === 'connected') {
       pc.getSenders().forEach(sender => {
@@ -438,7 +466,6 @@ const handleVoiceSignal = async (from, data) => {
   }
 }
 
-// — Stream restart —
 const restartStream = async (deviceId) => {
   const useId = deviceId !== undefined ? deviceId : activeDeviceId
   const constraints = {
@@ -470,56 +497,28 @@ const restartStream = async (deviceId) => {
   } catch {}
 }
 
-// — Session recording —
 const startTrackRecording = (pubkey, sourceNode, name, videoTrack) => {
   if (!remoteCtx || sessionTracks.has(pubkey)) return
   const dest = remoteCtx.createMediaStreamDestination()
   sourceNode.connect(dest)
 
-  // Canvas for stable video — falls back to avatar when camera off
-  const canvas = document.createElement('canvas')
-  canvas.width = 320; canvas.height = 240
-  const ctx2d = canvas.getContext('2d')
-  const color = avatarColor(pubkey)
-  const drawAvatar = () => {
-    ctx2d.fillStyle = '#1a1a1a'; ctx2d.fillRect(0, 0, 320, 240)
-    ctx2d.fillStyle = color; ctx2d.beginPath(); ctx2d.arc(160, 95, 58, 0, Math.PI * 2); ctx2d.fill()
-    ctx2d.fillStyle = '#fff'; ctx2d.font = 'bold 54px sans-serif'
-    ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle'
-    ctx2d.fillText((name || '?')[0].toUpperCase(), 160, 95)
+  const tracks = []
+  tracks.push(...dest.stream.getAudioTracks())
+  if (videoTrack && videoTrack.readyState !== 'ended' && !isIOS) {
+    tracks.push(videoTrack)
   }
-  let liveVideo = false
-  let frameTimer = null
-  if (videoTrack && videoTrack.readyState !== 'ended') {
-    const vid = document.createElement('video')
-    vid.muted = true; vid.autoplay = true; vid.playsInline = true
-    vid.srcObject = new MediaStream([videoTrack])
-    vid.play().catch(() => {})
-    liveVideo = true
-    videoTrack.addEventListener('ended', () => { liveVideo = false })
-    frameTimer = setInterval(() => {
-      if (liveVideo && vid.readyState >= 2) ctx2d.drawImage(vid, 0, 0, 320, 240)
-      else drawAvatar()
-    }, 1000 / 30)
-  } else {
-    drawAvatar()
-    frameTimer = setInterval(drawAvatar, 1000)
-  }
-
-  const canvasTrack = canvas.captureStream(30).getVideoTracks()[0]
-  const recStream = new MediaStream([...dest.stream.getAudioTracks(), canvasTrack])
+  const recStream = new MediaStream(tracks)
   const mimeType = SESSION_MIME
   const rec = new MediaRecorder(recStream, { mimeType })
   const chunks = []
   rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
   rec.onstop = () => {
-    clearInterval(frameTimer)
     const blob = new Blob(chunks, { type: rec.mimeType })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     const ts = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
     const safeName = name.replace(/[^a-z0-9]/gi, '_').slice(0, 30)
-    a.href = url; a.download = `speakez-${state.activeVoiceChannel || 'session'}-${ts}-${safeName}.webm`
+    a.href = url; a.download = `speakez-${state.activeVoiceChannel || 'session'}-${ts}-${safeName}.${isIOS ? 'webm' : 'webm'}`
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 5000)
     sessionTracks.delete(pubkey)
@@ -550,7 +549,6 @@ export const stopSessionRecording = () => {
   }
 }
 
-// — Leave —
 export const leaveVoice = () => {
   stopSessionRecording()
   clearInterval(speakInterval); speakInterval = null
@@ -574,7 +572,6 @@ export const leaveVoice = () => {
   renderVoiceBar()
 }
 
-// — Device menu —
 const populateDevices = async () => {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices()
@@ -587,8 +584,8 @@ const populateDevices = async () => {
 const selectOutput = async (deviceId) => {
   activeOutputId = deviceId
   buildDevMenu()
-  if (remoteCtx?.setSinkId) {
-    try { await remoteCtx.setSinkId(deviceId) } catch {}
+  for (const audio of peerAudios.values()) {
+    if (audio.setSinkId) try { await audio.setSinkId(deviceId) } catch {}
   }
 }
 
@@ -675,10 +672,22 @@ voiceDevBtn.addEventListener('click', (e) => {
 voiceDevMenu.addEventListener('click', e => e.stopPropagation())
 document.addEventListener('click', () => { voiceDevMenu.style.display = 'none' })
 
-// — Join —
 export const joinVoice = async (channelId) => {
   if (state.activeVoiceChannel === channelId) return
   if (state.activeVoiceChannel) leaveVoice()
+
+  console.log('[mobile] diagnostics:', {
+    userAgent: navigator.userAgent,
+    audioCtxSupported: typeof AudioContext !== 'undefined',
+    mediaRecorderSupported: typeof MediaRecorder !== 'undefined',
+    webmSupported: MediaRecorder.isTypeSupported?.('video/webm'),
+    opusSupported: MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus'),
+    ios: isIOS
+  })
+
+  remoteCtx = new AudioContext()
+  try { await remoteCtx.resume() } catch (e) { console.warn('[mobile] remoteCtx resume failed', e) }
+
   await refreshTurnCredentials()
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
@@ -689,14 +698,14 @@ export const joinVoice = async (channelId) => {
     alert('Microphone access denied.'); return
   }
   activeDeviceId = localStream.getAudioTracks()[0]?.getSettings()?.deviceId || null
-  remoteCtx = new AudioContext()
-  await remoteCtx.resume()
+  for (const [pk, s] of pendingAudio) addAudio(pk, s)
+  pendingAudio.clear()
   setupLocalPipeline(localStream)
   speakInterval = setInterval(tickSpeaking, 80)
   await populateDevices()
   state.activeVoiceChannel = channelId
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  voiceWs = new WebSocket(`${proto}//${location.host}/api/ws?token=${encodeURIComponent(session.token)}&room=${encodeURIComponent(channelId)}`)
+  voiceWs = new WebSocket(`${proto}//${location.host}/api/ws?token=${encodeURIComponent(session.token)}&room=${encodeURIComponent(channelId)}&voice=1`)
 
   voiceWs.addEventListener('message', e => {
     try {
@@ -718,6 +727,13 @@ export const joinVoice = async (channelId) => {
         closePeer(msg.pubkey); renderVoiceBar()
       } else if (msg.type === 'signal') {
         handleVoiceSignal(msg.from, msg.data)
+      } else if (msg.type === 'voice-speaking') {
+        const pubkey = msg.pubkey
+        const isSpeaking = msg.speaking
+        voiceBarMems.querySelector(`[data-pubkey="${pubkey}"]`)?.classList.toggle('speaking', isSpeaking)
+        voiceFloat.querySelector(`[data-pubkey="${pubkey}"]`)?.classList.toggle('speaking', isSpeaking)
+        document.querySelector(`#vg-tiles [data-pubkey="${pubkey}"]`)?.classList.toggle('speaking', isSpeaking)
+        if (isSpeaking) speakingSet.add(pubkey); else speakingSet.delete(pubkey)
       } else if (msg.type === 'profile' && msg.pubkey && voiceMembers.has(msg.pubkey)) {
         voiceMembers.set(msg.pubkey, { ...voiceMembers.get(msg.pubkey), name: msg.name, avatar: msg.avatar })
         renderVoiceBar()
@@ -728,7 +744,6 @@ export const joinVoice = async (channelId) => {
   renderVoiceBar()
 }
 
-// — Mute —
 voiceMuteBtn.addEventListener('click', () => {
   muted = !muted
   localStream?.getAudioTracks().forEach(t => { t.enabled = !muted })
@@ -737,9 +752,8 @@ voiceMuteBtn.addEventListener('click', () => {
   voiceMuteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute')
 })
 
-const renderVoiceFloat = () => {} // retired
+const renderVoiceFloat = () => {}
 
-// — Grid overlay —
 let gridOpen = false
 
 const renderGrid = () => {
@@ -749,11 +763,14 @@ const renderGrid = () => {
   tilesEl.innerHTML = ''
   const me = { pubkey: session.pubkey, name: localStorage.getItem('name'), avatar: localStorage.getItem('avatar'), isSelf: true }
   const members = [me, ...voiceMembers.values()]
-  const cols = members.length <= 1 ? 1 : members.length <= 4 ? 2 : 3
+  const narrow = voiceGrid.offsetWidth < 600
+  const cols = narrow ? 1 : members.length <= 1 ? 1 : members.length <= 4 ? 2 : 3
   tilesEl.style.setProperty('--vg-cols', cols)
+  document.getElementById('vg-count').textContent = `${members.length} participant${members.length === 1 ? '' : 's'}`
   for (const m of members) {
     const tile = document.createElement('div')
     tile.className = 'vg-tile'
+    if (speakingSet.has(m.pubkey)) tile.classList.add('speaking')
     tile.dataset.pubkey = m.pubkey
     tile.style.setProperty('--av-color', avatarColor(m.pubkey))
     const videoTrack = m.isSelf ? localVideoStream?.getVideoTracks()[0] : peerVideoTracks.get(m.pubkey)
@@ -767,7 +784,15 @@ const renderGrid = () => {
       const av = document.createElement('div')
       av.className = 'vg-avatar'
       av.style.background = avatarColor(m.pubkey)
-      av.textContent = (m.name || '?')[0].toUpperCase()
+      if (m.avatar) {
+        const img = document.createElement('img')
+        img.src = m.avatar
+        img.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover'
+        img.onerror = () => { img.remove(); av.textContent = (m.name || '?')[0].toUpperCase() }
+        av.appendChild(img)
+      } else {
+        av.textContent = (m.name || '?')[0].toUpperCase()
+      }
       tile.appendChild(av)
     }
     const nameEl = document.createElement('div')

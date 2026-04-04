@@ -1,4 +1,5 @@
 import { sendPush } from './push.js'
+import { broadcastToRooms } from './auth.js'
 
 export const sanitizeFtsQuery = (q) => {
   const specials = '"*+-().[]:^$|\\'
@@ -520,12 +521,18 @@ export class ChatRoom {
     const { pubkey } = ws.deserializeAttachment()
     if (pubkey) {
       const otherSessions = this.state.getWebSockets().filter(s => {
+        if (s === ws) return false
         try { return s.deserializeAttachment().pubkey === pubkey } catch { return false }
       })
       if (otherSessions.length === 0) {
         const roomId = this._roomId || await this.state.storage.get('room_id')
         if (roomId && this.env.KV) {
-          this.env.KV.delete(`presence:${roomId}:${pubkey}`).catch(() => {})
+          await this.env.KV.delete(`presence:${roomId}:${pubkey}`).catch(() => {})
+          const sidebar = await this.env.KV.get('sidebar', { type: 'json' }).catch(() => null)
+          const ch = (sidebar?.channels || []).find(c => c.id === roomId)
+          if (ch?.type === 'voice') {
+            broadcastToRooms(JSON.stringify({ type: 'reload_sidebar' }), this.env).catch(() => {})
+          }
         }
       }
       const leave = JSON.stringify({ type: 'leave', pubkey })

@@ -1,4 +1,4 @@
-import { handleAuth, memberByToken } from './auth.js'
+import { handleAuth, memberByToken, broadcastToRooms } from './auth.js'
 import { isRoomMember } from './dm.js'
 import { handleOG } from './og.js'
 import { ChatRoom } from './room.js'
@@ -94,6 +94,9 @@ export default {
 
       const presenceData = { pubkey: found.pubkey, name: found.member.name || '', avatar: found.member.avatar || '' }
       ctx.waitUntil(env.KV.put(`presence:${room}:${found.pubkey}`, '1', { expirationTtl: 180, metadata: presenceData }))
+      if (url.searchParams.get('voice') === '1') {
+        ctx.waitUntil(broadcastToRooms(JSON.stringify({ type: 'reload_sidebar' }), env))
+      }
 
       const id = env.CHAT_ROOM.idFromName(room)
       const stub = env.CHAT_ROOM.get(id)
