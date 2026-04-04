@@ -76,6 +76,16 @@ export const isAdminOrKvAdmin = async (pubkey, env, kv) => {
 export const canCloseThread = (pubkey, thread, env, kvAdmins) =>
   !!(thread && (thread.createdBy === pubkey || isOwnerPubkey(pubkey, env) || isKvAdmin(pubkey, kvAdmins)))
 
+// Pure function: given KV list keys (objects with .name), returns { roomId: count }
+export const countPresenceByRoom = (keys) => {
+  const counts = {}
+  for (const key of keys) {
+    const parts = key.name.split(':')
+    if (parts.length === 3) counts[parts[1]] = (counts[parts[1]] || 0) + 1
+  }
+  return counts
+}
+
 export const sanitizeDescription = (desc) => {
   if (desc == null) return ''
   // eslint-disable-next-line no-control-regex
@@ -377,11 +387,7 @@ export const handleAuth = async (req, env, domain) => {
       const voiceChannels = (sidebar.channels || []).filter(c => c.type === 'voice')
       if (voiceChannels.length > 0) {
         const allPresence = await env.KV.list({ prefix: 'presence:' })
-        const counts = {}
-        for (const key of allPresence.keys) {
-          const parts = key.name.split(':')
-          if (parts.length === 3) counts[parts[1]] = (counts[parts[1]] || 0) + 1
-        }
+        const counts = countPresenceByRoom(allPresence.keys)
         sidebar.channels = sidebar.channels.map(ch =>
           ch.type === 'voice' ? { ...ch, voiceCount: counts[ch.id] || 0 } : ch
         )

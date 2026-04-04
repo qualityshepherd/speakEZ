@@ -1,5 +1,5 @@
 import { unit as test } from '../testpup.js'
-import { isOwnerPubkey, isKvAdmin, sanitizeDescription, sanitizeNote, canCloseThread } from '../../worker/auth.js'
+import { isOwnerPubkey, isKvAdmin, sanitizeDescription, sanitizeNote, canCloseThread, countPresenceByRoom } from '../../worker/auth.js'
 
 // — sanitizeDescription —
 
@@ -165,4 +165,52 @@ test('isKvAdmin: returns false for null pubkey', t => {
 
 test('isKvAdmin: works with multiple entries', t => {
   t.ok(isKvAdmin('pk2', ['pk1', 'pk2', 'pk3']))
+})
+
+// — countPresenceByRoom —
+
+const key = (name) => ({ name })
+
+test('countPresenceByRoom: single user in one room', t => {
+  const counts = countPresenceByRoom([key('presence:general:pk1')])
+  t.is(counts['general'], 1)
+})
+
+test('countPresenceByRoom: multiple users in same room', t => {
+  const counts = countPresenceByRoom([
+    key('presence:voice:pk1'),
+    key('presence:voice:pk2'),
+    key('presence:voice:pk3')
+  ])
+  t.is(counts['voice'], 3)
+})
+
+test('countPresenceByRoom: users spread across rooms', t => {
+  const counts = countPresenceByRoom([
+    key('presence:room-a:pk1'),
+    key('presence:room-b:pk2'),
+    key('presence:room-a:pk3')
+  ])
+  t.is(counts['room-a'], 2)
+  t.is(counts['room-b'], 1)
+})
+
+test('countPresenceByRoom: empty list returns empty object', t => {
+  const counts = countPresenceByRoom([])
+  t.is(Object.keys(counts).length, 0)
+})
+
+test('countPresenceByRoom: malformed keys (wrong segment count) are ignored', t => {
+  const counts = countPresenceByRoom([
+    key('presence:onlytwo'),
+    key('presence:room:pk1:extra'),
+    key('presence:room:pk2')
+  ])
+  t.is(counts['onlytwo'], undefined)
+  t.is(counts['room'], 1)
+})
+
+test('countPresenceByRoom: room with no users returns undefined (not 0)', t => {
+  const counts = countPresenceByRoom([key('presence:voice:pk1')])
+  t.is(counts['other'], undefined)
 })
