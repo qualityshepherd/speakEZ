@@ -10,13 +10,47 @@ import { renderText } from './text-utils.js'
 const isTouchDevice = () => window.matchMedia('(hover: none) and (pointer: coarse)').matches
 
 let reconnectTimer = null
+let reconnectAttempts = 0
+
+import { calcBackoffDelay } from './lib/ws-utils.js'
+
+const scheduleReconnect = () => {
+  clearTimeout(reconnectTimer)
+  reconnectAttempts++
+  const delay = calcBackoffDelay(reconnectAttempts) + Math.random() * 500 // protect from thundering heard
+  reconnectTimer = setTimeout(() => connect(state.activeChannelId), delay)
+}
+
+const CACHE_TTL = 60_000
+const cacheGet = (key) => {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const { data, ts } = JSON.parse(raw)
+    if (Date.now() - ts > CACHE_TTL) return null
+    return data
+  } catch { return null }
+}
+const cacheSet = (key, data) => {
+  try { sessionStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })) } catch {}
+}
 
 const fetchPresence = (room) => {
   if (!session.token) return
+  const cached = cacheGet(`sz:presence:${room}`)
+  if (cached) {
+    state.onlineMembers.clear()
+    for (const m of cached) {
+      if (m.pubkey) { state.onlineMembers.set(m.pubkey, m); state.allMembers.set(m.pubkey, m) }
+    }
+    import('./app.js').then(({ renderOnline }) => renderOnline())
+    return
+  }
   fetch(`/api/presence/${encodeURIComponent(room)}`, { headers: { Authorization: `Bearer ${session.token}` } })
     .then(r => r.ok ? r.json() : null)
     .then(members => {
       if (!members) return
+      cacheSet(`sz:presence:${room}`, members)
       state.onlineMembers.clear()
       for (const m of members) {
         if (m.pubkey) { state.onlineMembers.set(m.pubkey, m); state.allMembers.set(m.pubkey, m) }
@@ -66,18 +100,23 @@ export const connect = (room = state.activeChannelId) => {
     import('./ui-helpers.js').then(({ flushOutbox }) => flushOutbox())
     const focused = document.activeElement
     if (!isTouchDevice() && (!focused || focused === document.body || focused === chatInput)) chatInput.focus()
+    reconnectAttempts = 0
     fetchPresence(room)
     refreshUnread()
-    fetch('/api/dm', { headers: sidebarAuth() })
-      .then(res => res.ok ? res.json() : null)
-      .then(fresh => {
-        if (!fresh) return
-        let changed = false
-        for (const room of fresh) {
-          if (!dmRooms.find(r => r.id === room.id)) { dmRooms.push(room); changed = true }
-        }
-        if (changed) renderSidebar()
-      }).catch(() => {})
+    const cachedDms = cacheGet('sz:dms')
+    if (!cachedDms) {
+      fetch('/api/dm', { headers: sidebarAuth() })
+        .then(res => res.ok ? res.json() : null)
+        .then(fresh => {
+          if (!fresh) return
+          cacheSet('sz:dms', fresh)
+          let changed = false
+          for (const room of fresh) {
+            if (!dmRooms.find(r => r.id === room.id)) { dmRooms.push(room); changed = true }
+          }
+          if (changed) renderSidebar()
+        }).catch(() => {})
+    }
     const ping = setInterval(() => {
       if (state.ws.readyState === WebSocket.OPEN) state.ws.send('ping')
       else clearInterval(ping)
@@ -139,6 +178,7 @@ export const connect = (room = state.activeChannelId) => {
           .then(res => res.ok ? res.json() : null)
           .then(fresh => {
             if (!fresh) return
+            cacheSet('sz:dms', fresh)
             for (const room of fresh) {
               if (!dmRooms.find(r => r.id === room.id)) dmRooms.push(room)
             }
@@ -205,7 +245,7 @@ export const connect = (room = state.activeChannelId) => {
 
   state.ws.addEventListener('close', () => {
     typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
-    reconnectTimer = setTimeout(() => connect(state.activeChannelId), 1000)
+    scheduleReconnect()
   })
 
   state.ws.addEventListener('error', () => { if (state.ws.readyState !== WebSocket.CLOSED) state.ws.close() })
@@ -213,6 +253,7 @@ export const connect = (room = state.activeChannelId) => {
 
 const reconnectIfDead = () => {
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
+    reconnectAttempts = 0
     clearTimeout(reconnectTimer)
     connect(state.activeChannelId)
   }
