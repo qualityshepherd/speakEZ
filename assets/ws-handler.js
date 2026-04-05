@@ -7,12 +7,12 @@ import {
 import { chatInput, sendBtn } from './ui-helpers.js'
 import { renderText } from './text-utils.js'
 
+import { calcBackoffDelay } from './lib/ws-utils.js'
+
 const isTouchDevice = () => window.matchMedia('(hover: none) and (pointer: coarse)').matches
 
 let reconnectTimer = null
 let reconnectAttempts = 0
-
-import { calcBackoffDelay } from './lib/ws-utils.js'
 
 const scheduleReconnect = () => {
   clearTimeout(reconnectTimer)

@@ -1,6 +1,6 @@
 # speakEZ
 
-Group chat that stops at your circle. Invite-only. Not a platform, a sovereign signal. No accounts. No tracking. No one in the middle. 
+Group chat that stops at your circle. Invite-only. Not a platform, a sovereign signal. No accounts. No tracking. No one in the middle.
 
 Text, voice, and video running on Cloudflare's free tier.
 
@@ -44,37 +44,83 @@ cd speakez
 npm install
 ```
 
-**1. Infrastructure**
-> New to Wrangler? Run `npx wrangler login` first to authenticate your account.
+**1. Authenticate**
+```bash
+npx wrangler login
+```
 
-Create your KV namespace and R2 buckets:
+**2. Infrastructure**
+
+Create your KV namespace and R2 bucket:
 ```bash
 npx wrangler kv namespace create KV
-npx wrangler r2 bucket create speakez-uploads
-npx wrangler r2 bucket create speakez-emoji
+npx wrangler r2 bucket create speakez-backup
 ```
-Paste the KV `id` into your `wrangler.toml`.
+Paste the KV `id` into `wrangler.toml`.
 
-**2. Secrets**
-Set your admin credentials:
+**3. Config**
+
+Edit `wrangler.toml`:
+- Set `DOMAIN` to your Worker's domain (e.g. `speakez.yourname.workers.dev`)
+- Set `OWNER` to your public key (you'll get this after first login)
+
+**4. Secrets**
 ```bash
 npx wrangler secret put ADMIN_SECRET
-npx wrangler secret put ADMINS
 ```
-`ADMINS` is a comma-separated list of public keys.
+`ADMIN_SECRET` is the password you'll use to generate invite links.
 
-**3. Deploy**
+**5. Deploy**
 ```bash
 npx wrangler deploy
 ```
 
 ## ACCESS
 
-Generate an invite link by hitting the `/invite` endpoint with your `ADMIN_SECRET`:
+### Invite flow
 
-`https://yourdomain.workers.dev/invite?secret=ADMIN_SECRET`
+```
+Admin                          Invitee
+  |                               |
+  |-- GET /invite?secret=xxx ---> Worker
+  |<-- { link: https://...?invite=TOKEN } --
+  |                               |
+  |-- sends link to invitee ----> |
+  |                               |
+  |                  opens link --+
+  |                               |
+  |              sets passphrase --+
+  |                               +-- passphrase → Ed25519 keypair (in browser)
+  |                               |
+  |                  GET /register?invite=TOKEN&pubkey=... --> Worker
+  |                               |              marks invite used, stores pubkey
+  |                               |<-- 200 OK --
+  |                               |
+  |                        logs in +-- passphrase → keypair → sign challenge
+  |                               |
+  |                               +-- they're in
+```
 
-Send the link. They set a passphrase. They are in.
+Generate an invite link:
+
+```
+https://yourdomain.workers.dev/invite?secret=YOUR_ADMIN_SECRET
+```
+
+| OR just use the `Invite` link in the app's speakEZ menu.
+
+Send the link. They set a passphrase. They're in.
+
+### Getting your public key
+
+After your first login, go to **Settings → Profile**. Your public key is shown there. Set it as `OWNER` in `wrangler.toml` and redeploy to claim admin privileges.
+
+## HEALTH
+
+```
+GET /api/health
+```
+Returns binding status and timestamp. Point an uptime monitor here.
 
 ## LICENSE
 
