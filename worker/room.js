@@ -542,10 +542,6 @@ export class ChatRoom {
         try { peer.send(leave) } catch {}
       }
     }
-    const isPrivate = await this.state.storage.get('room_private')
-    if (isPrivate && this.state.getWebSockets().length === 0) {
-      await this.state.storage.deleteAll()
-    }
   }
 
   async webSocketClose (ws, code, reason) {
