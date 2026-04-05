@@ -13,12 +13,34 @@ const OG_PATH = '/api/og'
 const PAGES = ['/admin', '/login', '/me', '/invite']
 
 export default {
+  async scheduled (event, env, ctx) {
+    const url = `https://${env.DOMAIN}/api/health`
+    const res = await fetch(url).catch(e => ({ ok: false, status: 0, _err: e.message }))
+    if (!res.ok) {
+      console.error(`[health] check failed status=${res.status} url=${url}`)
+    } else {
+      const body = await res.json().catch(() => ({}))
+      const missing = Object.entries(body).filter(([k, v]) => v === 'missing').map(([k]) => k)
+      if (missing.length) console.error(`[health] missing bindings: ${missing.join(', ')}`)
+      else console.log(`[health] ok ts=${body.ts}`)
+    }
+  },
+
   async fetch (req, env, ctx) {
     const url = new URL(req.url)
     const path = url.pathname
 
     if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
       return new Response('method not allowed', { status: 405 })
+    }
+
+    if (path === '/api/health') {
+      return new Response(JSON.stringify({
+        kv: env.KV ? 'ok' : 'missing',
+        r2: env.BACKUP ? 'ok' : 'missing',
+        do: env.CHAT_ROOM ? 'ok' : 'missing',
+        ts: Date.now()
+      }), { headers: { 'Content-Type': 'application/json' } })
     }
 
     if (AUTH_PATHS.some(p => path.startsWith(p))) {

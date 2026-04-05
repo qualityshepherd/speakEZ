@@ -27,3 +27,6 @@ new_sqlite_classes = ["ChatRoom"]
 [[r2_buckets]]
 binding = "BACKUP"
 bucket_name = "speakez-backup"
+
+[triggers]
+crons = ["*/5 * * * *"]

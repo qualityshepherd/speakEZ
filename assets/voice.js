@@ -279,8 +279,8 @@ const removeAudio = (pubkey) => {
   const audio = peerAudios.get(pubkey)
   if (audio) { audio.pause(); audio.srcObject = null }
   peerAudios.delete(pubkey)
-  try { peerSrcs.get(pubkey)?.disconnect() } catch {}
-  try { peerGains.get(pubkey)?.disconnect() } catch {}
+  try { peerSrcs.get(pubkey)?.disconnect() } catch (e) { console.warn('[voice] peerSrc disconnect failed', pubkey?.slice(0, 8), e) }
+  try { peerGains.get(pubkey)?.disconnect() } catch (e) { console.warn('[voice] peerGain disconnect failed', pubkey?.slice(0, 8), e) }
   peerSrcs.delete(pubkey)
   analysers.delete(pubkey)
   speakingSet.delete(pubkey)
@@ -744,7 +744,7 @@ export const joinVoice = async (channelId) => {
         voiceMembers.set(msg.pubkey, { ...voiceMembers.get(msg.pubkey), name: msg.name, avatar: msg.avatar })
         renderVoiceBar()
       }
-    } catch {}
+    } catch (e) { console.warn('[voice] ws message handler failed', e) }
   })
   voiceWs.addEventListener('close', () => { if (state.activeVoiceChannel) leaveVoice() })
   renderVoiceBar()
