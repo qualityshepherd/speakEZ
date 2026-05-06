@@ -1,5 +1,10 @@
 export const session = JSON.parse(localStorage.getItem('session') || 'null')
 if (!session) { location.href = '/login.html'; throw new Error() }
+
+export const handleUnauthorized = () => {
+  localStorage.removeItem('session')
+  location.href = '/login.html'
+}
 document.documentElement.classList.remove('no-session')
 
 export const state = {

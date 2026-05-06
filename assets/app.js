@@ -1,4 +1,4 @@
-import { state, session } from './state.js'
+import { state, session, handleUnauthorized } from './state.js'
 import { esc, avatarColor, initial } from './utils.js'
 import { renderSidebar, loadSidebar, switchChannel, dmRooms, unreadChannels } from './sidebar.js'
 import { connect, fetchCustomEmoji } from './chat.js'
@@ -580,6 +580,7 @@ export const fetchBoot = async () => {
   if (!session?.token) return
   try {
     const res = await fetch('/api/boot', { headers: { Authorization: `Bearer ${session.token}` } })
+    if (res.status === 401) { handleUnauthorized(); return }
     if (!res.ok) return
     const d = await res.json()
     state.isAdmin = !!d.isAdmin

@@ -1,4 +1,4 @@
-import { state, session } from './state.js'
+import { state, session, handleUnauthorized } from './state.js'
 import { renderSidebar, sidebarAuth, refreshUnread, dmRooms, threadRooms, switchChannel } from './sidebar.js'
 import {
   messagesEl, renderMessage, renderReactions, renderLoadMore, prependMessage,
@@ -90,7 +90,10 @@ export const connect = (room = state.activeChannelId) => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   state.ws = new WebSocket(`${proto}//${location.host}/api/ws?token=${encodeURIComponent(session.token)}&room=${encodeURIComponent(room)}`)
 
+  let wsOpened = false
+
   state.ws.addEventListener('open', () => {
+    wsOpened = true
     chatInput.disabled = false
     sendBtn.disabled = false
     const uploadBtn = document.getElementById('upload-btn')
@@ -245,6 +248,12 @@ export const connect = (room = state.activeChannelId) => {
 
   state.ws.addEventListener('close', () => {
     typingUsers.forEach(u => clearTimeout(u.timer)); typingUsers.clear(); renderTyping()
+    if (!wsOpened) {
+      fetch('/api/boot', { headers: { Authorization: `Bearer ${session.token}` } })
+        .then(r => { if (r.status === 401) handleUnauthorized(); else scheduleReconnect() })
+        .catch(() => scheduleReconnect())
+      return
+    }
     scheduleReconnect()
   })
 

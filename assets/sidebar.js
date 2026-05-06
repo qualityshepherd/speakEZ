@@ -1,4 +1,4 @@
-import { state, session } from './state.js'
+import { state, session, handleUnauthorized } from './state.js'
 import { esc } from './utils.js'
 // voice and chat imported at bottom to handle circular refs at eval time
 import * as voice from './voice.js'
@@ -107,6 +107,9 @@ export const loadSidebar = async () => {
       fetch('/api/dm', { headers: sidebarAuth() }),
       fetch('/api/threads', { headers: sidebarAuth() })
     ])
+    if (sidebarRes.status === 401 || dmRes.status === 401 || threadRes.status === 401) {
+      handleUnauthorized(); return
+    }
     if (sidebarRes.ok) sidebarData = await sidebarRes.json()
     if (dmRes.ok) dmRooms = await dmRes.json()
     if (threadRes.ok) threadRooms = await threadRes.json()
